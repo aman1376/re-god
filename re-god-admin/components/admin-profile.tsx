@@ -1,7 +1,21 @@
 import { MapPin } from "lucide-react"
+import { useEffect, useState } from "react"
+import AdminApiService, { type MyCodeResponse } from "@/lib/api"
 import { Card, CardContent } from "@/components/ui/card"
 
 export function AdminProfile() {
+  const [myCode, setMyCode] = useState<string>("")
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await AdminApiService.getMyTeacherCode()
+        setMyCode(data.teacher_code)
+      } catch (_) {
+        // ignore, not critical for rendering
+      }
+    })()
+  }, [])
   return (
     <Card className="bg-white">
       <CardContent className="p-6">
@@ -15,6 +29,11 @@ export function AdminProfile() {
               <MapPin className="w-4 h-4 mr-1" />
               <span>Main Church</span>
             </div>
+            {myCode && (
+              <div className="mt-2 text-sm text-gray-700">
+                Teacher Code: <span className="font-mono font-semibold">{myCode}</span>
+              </div>
+            )}
           </div>
         </div>
       </CardContent>

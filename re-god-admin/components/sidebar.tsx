@@ -1,16 +1,19 @@
 "use client"
 
-import { Home, Search, Settings, User, LogOut } from "lucide-react"
-import { useRouter } from "next/navigation"
+import { Home, FileText, Settings, User, LogOut } from "lucide-react"
+import { useRouter, usePathname } from "next/navigation"
 
 export function Sidebar() {
   const router = useRouter()
+  const pathname = usePathname()
 
   const handleLogout = () => {
     localStorage.removeItem("isAuthenticated")
     localStorage.removeItem("userEmail")
     router.push("/login")
   }
+
+  const isActive = (path: string) => pathname === path
 
   return (
     <div className="w-16 bg-white border-r border-gray-200 flex flex-col items-center py-4">
@@ -19,24 +22,30 @@ export function Sidebar() {
       </div>
 
       <nav className="flex flex-col space-y-6">
-        <div className="flex flex-col items-center space-y-1 text-red-800">
+        <button 
+          onClick={() => router.push("/dashboard")}
+          className={`flex flex-col items-center space-y-1 ${isActive("/dashboard") ? "text-red-800" : "text-gray-400 hover:text-red-800"}`}
+        >
           <Home className="w-5 h-5" />
-          <span className="text-xs">Admin</span>
-        </div>
+          <span className="text-xs">Dashboard</span>
+        </button>
 
-        <div className="flex flex-col items-center space-y-1 text-gray-400">
-          <Search className="w-5 h-5" />
-          <span className="text-xs">Search</span>
-        </div>
+        <button 
+          onClick={() => router.push("/content-manager")}
+          className={`flex flex-col items-center space-y-1 ${isActive("/content-manager") ? "text-red-800" : "text-gray-400 hover:text-red-800"}`}
+        >
+          <FileText className="w-5 h-5" />
+          <span className="text-xs">Content</span>
+        </button>
 
         <div className="flex flex-col items-center space-y-1 text-gray-400">
           <Settings className="w-5 h-5" />
-          <span className="text-xs">Admin</span>
+          <span className="text-xs">Settings</span>
         </div>
 
         <div className="flex flex-col items-center space-y-1 text-gray-400">
           <User className="w-5 h-5" />
-          <span className="text-xs">My</span>
+          <span className="text-xs">Profile</span>
         </div>
       </nav>
 

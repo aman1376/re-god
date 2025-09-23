@@ -11,7 +11,7 @@ from app.schemas import (
     TeacherCodeCreate, TeacherCodeResponse, TeacherCodeUseRequest, 
     TeacherCodeUseResponse, StudentAccessResponse
 )
-from app.auth import get_current_user
+from app.utils.auth import get_current_user
 from app.rbac import require_permission, require_role
 
 router = APIRouter()

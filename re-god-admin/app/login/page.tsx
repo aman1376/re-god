@@ -8,28 +8,45 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import AdminApiService from "@/lib/api"
+import Link from "next/link"
 
 export default function LoginPage() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState("")
   const router = useRouter()
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsLoading(true)
+    setError("")
 
-    // Simulate login process
-    await new Promise((resolve) => setTimeout(resolve, 1000))
+    try {
+      const response = await AdminApiService.login({
+        identifier: email,
+        password: password,
+      });
 
-    // For demo purposes, accept any email/password
-    if (email && password) {
+      // Allow both admin and teacher to login to this portal
+      if (!['admin','teacher'].includes(response.user_data?.role)) {
+        throw new Error('Access denied. Admin or Teacher role required.');
+      }
+
+      // Store authentication state
       localStorage.setItem("isAuthenticated", "true")
       localStorage.setItem("userEmail", email)
+      localStorage.setItem("admin_user_email", email)
+      localStorage.setItem("portal_role", response.user_data?.role || '')
+      
       router.push("/dashboard")
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Login failed';
+      setError(errorMessage);
+    } finally {
+      setIsLoading(false)
     }
-
-    setIsLoading(false)
   }
 
   return (
@@ -65,10 +82,21 @@ export default function LoginPage() {
                 required
               />
             </div>
+            {error && (
+              <div className="text-red-600 text-sm text-center bg-red-50 p-2 rounded">
+                {error}
+              </div>
+            )}
             <Button type="submit" className="w-full bg-red-800 hover:bg-red-900" disabled={isLoading}>
               {isLoading ? "Signing in..." : "Sign In"}
             </Button>
           </form>
+          <div className="mt-4 text-center text-sm text-gray-600">
+            Are you a teacher? {" "}
+            <Link href="/auth/teacher-signup" className="text-red-800 hover:underline">
+              Complete signup
+            </Link>
+          </div>
         </CardContent>
       </Card>
     </div>

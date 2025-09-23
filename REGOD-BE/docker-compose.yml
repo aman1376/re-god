@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   api:
     build: .
@@ -10,6 +8,12 @@ services:
       - REDIS_URL=redis://redis:6379
       - JWT_SECRET=your-super-secret-jwt-key-change-in-production
       - NODE_ENV=development
+      - CLERK_API_KEY=sk_test_CSiSTMsbdk780KE3q5ietQu0vzrWqyqcf5QcY2pJR4
+      - CLERK_WEBHOOK_SECRET=whsec_0W4nP3ARqYanM0/vrBBEvevqDb/XzPLa
+      - CLERK_JWKS_URL=https://divine-urchin-82.clerk.accounts.dev/.well-known/jwks.json
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://3ace01de1504.ngrok-free.app,http://localhost:3000,http://localhost:19006}
+    env_file:
+      - .env
     depends_on:
       - db
       - redis

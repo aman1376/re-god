@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User
 from app.schemas import UserResponse
-from app.auth import get_current_user
+from app.utils.auth import get_current_user
 from app.rbac import require_permission
 
 router = APIRouter()

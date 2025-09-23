@@ -1,36 +1,135 @@
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ImageSourcePropType } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ImageSourcePropType, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import CircularProgress from '@/components/ui/CircularProgress';
+import ApiService, { type Course, type Module, type DashboardResponse } from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
 
-interface Chapter {
-  title: string;
-  image: ImageSourcePropType;
-}
-
-// Placeholder data
-const course = {
-  title: 'The God You Can Love',
-  progress: 25,
-  image: require('@/assets/images/Course Title Photo - The God You Can Love-toni-minikus.jpg'),
+// Helper function to convert relative URLs to full URLs
+const getImageUrl = (imageUrl: string | null): any => {
+  if (!imageUrl) return defaultChapterImage;
+  if (imageUrl.startsWith('http')) return { uri: imageUrl };
+  return { uri: `https://bf5773da486c.ngrok-free.app${imageUrl}` };
 };
 
-const chapters: Chapter[] = [
-  {
-    title: 'Best Teacher',
-    image: require('@/assets/images/Best Teacher-toni-minikus.jpg'),
-  },
-  {
-    title: 'Another Chapter',
-    image: require('@/assets/images/Best Teacher-toni-minikus.jpg'), 
-  },
-  // Add more chapters...
-];
+// Default placeholder image for fallback
+const defaultCourseImage = require('@/assets/images/Course Title Photo - The God You Can Love-toni-minikus.jpg');
+const defaultChapterImage = require('@/assets/images/Best Teacher-toni-minikus.jpg');
 
 export default function CourseScreen() {
   const router = useRouter();
+  const { isAuthenticated, loading: authLoading } = useAuth();
+  const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
+  const [modules, setModules] = useState<Module[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isAuthenticated && !authLoading) {
+      loadDashboard();
+    }
+  }, [isAuthenticated, authLoading]);
+
+  const loadDashboard = async () => {
+    try {
+      setLoading(true);
+      const dashboardData = await ApiService.getDashboard();
+      setDashboard(dashboardData);
+      
+      // Load modules for the first course that has modules
+      if (dashboardData.available_courses.length > 0) {
+        // Find a course that has modules (prefer course 4 "The God You Can Love")
+        const courseWithModules = dashboardData.available_courses.find((course: any) => course.course_id === 4) || 
+                                 dashboardData.available_courses.find((course: any) => course.course_id === 3) ||
+                                 dashboardData.available_courses[0];
+        
+        if (courseWithModules) {
+          try {
+            const courseModules = await ApiService.getCourseModules(courseWithModules.course_id);
+            setModules(courseModules);
+          } catch (moduleError) {
+            console.log('No modules found for course', courseWithModules.course_id);
+            setModules([]);
+          }
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load dashboard');
+      console.error('Error loading dashboard:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCoursePress = async (courseId: number) => {
+    try {
+      const courseModules = await ApiService.getCourseModules(courseId);
+      setModules(courseModules);
+    } catch (err) {
+      console.error('Error loading course modules:', err);
+    }
+  };
+
+  const handleModulePress = async (module: Module) => {
+    try {
+      // Update progress when user accesses a module
+      await ApiService.updateCourseProgress(module.course_id, 0, module.id);
+    } catch (err) {
+      console.error('Error updating progress:', err);
+      // Continue even if progress update fails
+    }
+    
+    // Navigate to lesson
+    router.push({ 
+      pathname: '/(tabs)/lesson' as any, 
+      params: { 
+        moduleId: module.id.toString(),
+        courseId: module.course_id.toString()
+      } 
+    });
+  };
+
+  if (authLoading || loading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#6B8E23" />
+          <Text style={styles.loadingText}>
+            {authLoading ? 'Authenticating...' : 'Loading courses...'}
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Please log in to view courses</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (error) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>Error: {error}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={loadDashboard}>
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // Use API data
+  const currentCourse = dashboard?.last_visited_course;
+  const availableCourses = dashboard?.available_courses || [];
   
   return (
     <SafeAreaView style={styles.container}>
@@ -44,24 +143,29 @@ export default function CourseScreen() {
         </View>
 
         {/* Course Card */}
-        <View style={styles.courseCard}>
-          <Image source={course.image} style={styles.courseImage} />
-          <Text style={styles.courseTitle}>{course.title}</Text>
-          {/* Progress Circle */}
-          <View style={styles.progressContainer}>
-            <CircularProgress
-              size={100}
-              strokeWidth={10}
-              progress={course.progress}
-              backgroundColor="#E0E0E0"
-              progressColor="#6B8E23"
+        {currentCourse && (
+          <View style={styles.courseCard}>
+            <Image 
+              source={currentCourse.thumbnail_url ? { uri: currentCourse.thumbnail_url } : defaultCourseImage} 
+              style={styles.courseImage} 
             />
-            <View style={styles.progressTextContainer}>
-              <Text style={styles.progressText}>{course.progress}%</Text>
+            <Text style={styles.courseTitle}>{currentCourse.course_title}</Text>
+            {/* Progress Circle */}
+            <View style={styles.progressContainer}>
+              <CircularProgress
+                size={100}
+                strokeWidth={10}
+                progress={currentCourse.overall_progress_percentage}
+                backgroundColor="#E0E0E0"
+                progressColor="#6B8E23"
+              />
+              <View style={styles.progressTextContainer}>
+                <Text style={styles.progressText}>{currentCourse.overall_progress_percentage}%</Text>
+              </View>
+              <Text style={styles.progressLabel}>Course Progress</Text>
             </View>
-            <Text style={styles.progressLabel}>Course Progress</Text>
           </View>
-        </View>
+        )}
 
         {/* Continue Section */}
         <View style={styles.continueSection}>
@@ -69,21 +173,26 @@ export default function CourseScreen() {
           <Text style={styles.continueSubtitle}>Pick up where you left off</Text>
         </View>
 
-        {/* Chapters */}
+        {/* Available Courses */}
         <View style={styles.chaptersSection}>
-          <Text style={styles.chaptersTitle}>Chapters</Text>
+          <Text style={styles.chaptersTitle}>Available Courses</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {chapters.map((chapter, index) => (
+            {availableCourses.map((course) => (
               <TouchableOpacity 
-                key={index}
-                onPress={() => router.push({ pathname: '/(tabs)/lesson' as any, params: { chapterTitle: chapter.title } })}
+                key={course.course_id}
+                onPress={() => handleCoursePress(course.course_id)}
               >
                 <View style={styles.chapterCard}>
-                  <Image source={chapter.image} style={styles.chapterImage} />
+                  <Image 
+                    source={getImageUrl(course.thumbnail_url || null)} 
+                    style={styles.chapterImage} 
+                  />
                   <View style={styles.chapterTextContainer}>
-                    <Text style={styles.chapterTitle}>{chapter.title}</Text>
+                    <Text style={styles.chapterTitle}>{course.course_title}</Text>
                     <View style={styles.lessonButton}>
-                      <Text style={styles.lessonButtonText}>Lesson Index</Text>
+                      <Text style={styles.lessonButtonText}>
+                        {course.is_new ? 'Start Course' : 'Continue'}
+                      </Text>
                     </View>
                   </View>
                 </View>
@@ -91,6 +200,34 @@ export default function CourseScreen() {
             ))}
           </ScrollView>
         </View>
+
+        {/* Modules */}
+        {modules.length > 0 && (
+          <View style={styles.chaptersSection}>
+            <Text style={styles.chaptersTitle}>Lessons</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+              {modules.map((module) => (
+                <TouchableOpacity 
+                  key={module.id}
+                  onPress={() => handleModulePress(module)}
+                >
+                  <View style={styles.chapterCard}>
+                    <Image 
+                      source={getImageUrl(module.header_image_url || null)} 
+                      style={styles.chapterImage} 
+                    />
+                    <View style={styles.chapterTextContainer}>
+                      <Text style={styles.chapterTitle}>{module.title}</Text>
+                      <View style={styles.lessonButton}>
+                        <Text style={styles.lessonButtonText}>Start Lesson</Text>
+                      </View>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        )}
 
         {/* Footer */}
         <View style={styles.footer}>
@@ -221,5 +358,38 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: 'gray',
     textAlign: 'center',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 16,
+    color: '#6B8E23',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  errorText: {
+    fontSize: 16,
+    color: 'red',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  retryButton: {
+    backgroundColor: '#6B8E23',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });

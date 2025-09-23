@@ -3,10 +3,14 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from app.database import get_db
-from app.models import User, Role, Permission, TeacherAssignment, TeacherCode, StudentTeacherAccess
+from app.models import User, Role, Permission, TeacherAssignment, TeacherCode, StudentTeacherAccess, user_roles, Course
 from app.schemas import RoleResponse, PermissionResponse, TeacherAssignmentResponse, UserResponse, TeacherCodeResponse
-from app.auth import get_current_user
+from app.clerk import clerk_client
+from datetime import datetime, timedelta
+import secrets, string
+from app.utils.auth import get_current_user
 from app.rbac import require_permission, require_role
+from app.utils.security import get_password_hash
 
 router = APIRouter()
 
@@ -21,6 +25,164 @@ async def get_all_users(
     """Get all users (admin only)"""
     users = db.query(User).offset(skip).limit(limit).all()
     return users
+
+def _generate_teacher_code(length: int = 8) -> str:
+    alphabet = string.ascii_uppercase + string.digits
+    return ''.join(secrets.choice(alphabet) for _ in range(length))
+
+@router.post("/teachers/invite", response_model=dict)
+@require_permission("admin:users:manage")
+async def invite_teacher(
+    payload: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Invite a teacher by name+email via Clerk and prepare a teacher code.
+       Body: { name: str, email: str, max_uses?: int, expires_in_days?: int, redirect_url?: str }
+    """
+    name = payload.get("name")
+    email = payload.get("email")
+    max_uses = payload.get("max_uses", 1)
+    expires_in_days = payload.get("expires_in_days")
+    redirect_url = payload.get("redirect_url")
+
+    if not name or not email:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing name or email")
+
+    # Ensure user exists or create locally.
+    teacher = db.query(User).filter(User.email == email).first()
+    if not teacher:
+        teacher = User(email=email, name=name, is_verified=False)
+        db.add(teacher)
+        db.flush()
+
+    # Ensure teacher role is assigned
+    teacher_role = db.query(Role).filter(Role.name == "teacher").first()
+    if not teacher_role:
+        raise HTTPException(status_code=500, detail="Teacher role not configured")
+    if teacher_role not in teacher.roles:
+        teacher.roles.append(teacher_role)
+
+    # Create Clerk invitation (sends email)
+    invitation = clerk_client.create_invitation(email_address=email, redirect_url=redirect_url)
+
+    # Generate teacher code and persist
+    code = _generate_teacher_code()
+    while db.query(TeacherCode).filter(TeacherCode.code == code).first():
+        code = _generate_teacher_code()
+
+    expires_at = None
+    if expires_in_days is not None:
+        try:
+            expires_at = datetime.utcnow() + timedelta(days=int(expires_in_days))
+        except Exception:
+            pass
+
+    teacher_code = TeacherCode(
+        code=code,
+        teacher_id=teacher.id,
+        max_uses=max_uses,
+        expires_at=expires_at,
+    )
+    db.add(teacher_code)
+    db.commit()
+    db.refresh(teacher_code)
+
+    return {
+        "teacher_user_id": str(teacher.id),
+        "teacher_name": teacher.name,
+        "teacher_email": teacher.email,
+        "teacher_code": teacher_code.code,
+        # Prefer Clerk invitation URL as shareable link
+        "invitation_link": (invitation or {}).get("url") if isinstance(invitation, dict) else None,
+    }
+
+@router.get("/my-code", response_model=dict)
+@require_role(["admin", "teacher"])  # Admins and Teachers can have/show a code
+async def get_or_create_my_teacher_code(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Return the current user's teacher code, creating one if missing.
+    Admins get a code too so they can distribute to students for testing.
+    """
+    # Ensure the user has a TeacherCode
+    code_obj = db.query(TeacherCode).filter(TeacherCode.teacher_id == current_user.id).first()
+    if not code_obj:
+        # Generate a unique code
+        code = _generate_teacher_code()
+        while db.query(TeacherCode).filter(TeacherCode.code == code).first():
+            code = _generate_teacher_code()
+
+        code_obj = TeacherCode(
+            code=code,
+            teacher_id=current_user.id,
+            max_uses=0,  # unlimited by default for owner; can be changed later
+            expires_at=None,
+        )
+        db.add(code_obj)
+        db.commit()
+        db.refresh(code_obj)
+
+    return {
+        "teacher_user_id": str(current_user.id),
+        "teacher_code": code_obj.code,
+        "is_active": code_obj.is_active,
+        "use_count": code_obj.use_count,
+        "max_uses": code_obj.max_uses,
+        "expires_at": code_obj.expires_at.isoformat() if code_obj.expires_at else None,
+    }
+
+
+@router.post("/teachers/signup", response_model=dict)
+async def complete_teacher_signup(
+    payload: dict,
+    db: Session = Depends(get_db)
+):
+    """Complete teacher signup using email, password and teacher_code.
+    Body: { name, email, password, teacher_code }
+    Creates password for existing invited teacher and verifies account.
+    """
+    name = payload.get("name")
+    email = payload.get("email")
+    password = payload.get("password")
+    teacher_code = payload.get("teacher_code")
+
+    if not email or not password or not teacher_code:
+        raise HTTPException(status_code=400, detail="Missing required fields")
+
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        # Create if absent
+        user = User(email=email, name=name or email.split('@')[0])
+        db.add(user)
+        db.flush()
+
+    # Validate teacher code belongs to this user (or is unclaimed)
+    code_rec = db.query(TeacherCode).filter(TeacherCode.code == teacher_code).first()
+    if not code_rec or (code_rec.teacher_id and code_rec.teacher_id != user.id):
+        raise HTTPException(status_code=400, detail="Invalid teacher code")
+
+    # Ensure teacher role
+    teacher_role = db.query(Role).filter(Role.name == "teacher").first()
+    if not teacher_role:
+        raise HTTPException(status_code=500, detail="Teacher role not configured")
+    if teacher_role not in user.roles:
+        user.roles.append(teacher_role)
+
+    # Assign code to user if not already
+    if not code_rec.teacher_id:
+        code_rec.teacher_id = user.id
+
+    # Set password and verify
+    user.hashed_password = get_password_hash(password)
+    user.is_verified = True
+    if name:
+        user.name = name
+
+    db.commit()
+
+    return {"message": "Teacher signup completed. You can now log in.", "user_id": str(user.id)}
 
 @router.get("/roles", response_model=List[RoleResponse])
 @require_permission("admin:users:manage")
@@ -191,3 +353,56 @@ async def get_all_teacher_codes(
         ))
     
     return response
+
+@router.get("/stats")
+@require_permission("admin:users:manage")
+async def get_admin_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get admin statistics"""
+    # Count total users
+    total_users = db.query(User).count()
+    
+    # Count teachers
+    teacher_role = db.query(Role).filter(Role.name == "teacher").first()
+    total_teachers = db.query(User).join(user_roles, User.id == user_roles.c.user_id).filter(user_roles.c.role_id == teacher_role.id).count() if teacher_role else 0
+    
+    # Count students (users with 'user' role)
+    user_role = db.query(Role).filter(Role.name == "user").first()
+    total_students = db.query(User).join(user_roles, User.id == user_roles.c.user_id).filter(user_roles.c.role_id == user_role.id).count() if user_role else 0
+    
+    # Count courses
+    total_courses = db.query(Course).count()
+    
+    return {
+        "total_users": total_users,
+        "total_teachers": total_teachers,
+        "total_students": total_students,
+        "total_courses": total_courses
+    }
+
+@router.get("/teachers")
+@require_permission("admin:users:manage")
+async def get_teachers_directory(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all teachers"""
+    teacher_role = db.query(Role).filter(Role.name == "teacher").first()
+    if not teacher_role:
+        return []
+    
+    teachers = db.query(User).join(user_roles, User.id == user_roles.c.user_id).filter(user_roles.c.role_id == teacher_role.id).all()
+    
+    return [
+        {
+            "id": str(teacher.id),
+            "name": teacher.name,
+            "email": teacher.email,
+            "avatar_url": teacher.avatar_url,
+            "created_at": teacher.created_at.isoformat() if teacher.created_at else None,
+            "is_active": teacher.is_active
+        }
+        for teacher in teachers
+    ]

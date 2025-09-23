@@ -4,7 +4,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 import uuid
 from app.database import Base
 
@@ -68,11 +68,21 @@ class User(Base):
     refresh_tokens = relationship("RefreshToken", back_populates="user")
 
     def has_permission(self, permission_name: str) -> bool:
-        return any(
+        # Check if user has the specific permission
+        has_specific = any(
             permission.name == permission_name
             for role in self.roles
             for permission in role.permissions
         )
+        
+        # Check if user has admin:all permission (grants all permissions)
+        has_admin_all = any(
+            permission.name == "admin:all"
+            for role in self.roles
+            for permission in role.permissions
+        )
+        
+        return has_specific or has_admin_all
 
     def has_role(self, role_name: str) -> bool:
         return any(role.name == role_name for role in self.roles)
@@ -216,17 +226,52 @@ class Course(Base):
     creator = relationship("User", foreign_keys=[created_by])
 
 
+class Chapter(Base):
+    __tablename__ = "chapters"
+
+    id = Column(Integer, primary_key=True, index=True)
+    course_id = Column(Integer, ForeignKey("courses.id"), nullable=False)
+    title = Column(String, nullable=False)
+    cover_image_url = Column(String, nullable=True)
+    order = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
+    quiz = Column(JSONB, nullable=True)
+
+    course = relationship("Course")
+    modules = relationship("Module", back_populates="chapter")
+
+
 class Module(Base):
     __tablename__ = "modules"
 
     id = Column(Integer, primary_key=True, index=True)
     course_id = Column(Integer, ForeignKey("courses.id"))
+    chapter_id = Column(Integer, ForeignKey("chapters.id"), nullable=True)
     title = Column(String, index=True, nullable=False)
     description = Column(Text, nullable=True)
+    # Content fields to support mobile lesson page
+    content = Column(Text, nullable=True)
+    key_verses = Column(Text, nullable=True)
+    key_verses_ref = Column(String, nullable=True)
+    key_verses_json = Column(JSONB, nullable=True)
+    lesson_study = Column(Text, nullable=True)
+    lesson_study_ref = Column(String, nullable=True)
+    response_prompt = Column(Text, nullable=True)
+    music_selection = Column(Text, nullable=True)
+    further_study = Column(Text, nullable=True)
+    further_study_json = Column(JSONB, nullable=True)
+    personal_experiences = Column(Text, nullable=True)
+    resources = Column(Text, nullable=True)
+    resources_json = Column(JSONB, nullable=True)
+    artwork = Column(Text, nullable=True)
+    header_image_url = Column(String, nullable=True)
+    media_url = Column(String, nullable=True)  # consolidated audio/video URL
+    quiz = Column(JSONB, nullable=True)  # structured quiz data
     order = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)
 
     course = relationship("Course")
+    chapter = relationship("Chapter", back_populates="modules")
 
 
 class UserCourseProgress(Base):

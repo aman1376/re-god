@@ -6,6 +6,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 import asyncpg
 import redis.asyncio as redis
 import bcrypt
@@ -21,6 +22,8 @@ import logging
 import os
 from functools import wraps
 import time
+
+logger = logging.getLogger(__name__)
 
 # Configuration
 class Config:
@@ -83,11 +86,36 @@ app = FastAPI(
 # Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if config.NODE_ENV == "development" else ["https://regod.app"],
+    allow_origins=[
+        "http://localhost:3000",
+        "https://localhost:3000",
+        "https://906670ce5cdf.ngrok-free.app",
+        "*" if config.NODE_ENV == "development" else "https://regod.app"
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+# Include routers
+from app.routes import auth, courses, favorites, chat, profile, admin, teacher_codes, clerk_webhooks, uploads
+app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
+# app.include_router(courses.router, prefix="/api", tags=["Courses"])  # Temporarily disabled due to auth compatibility
+app.include_router(favorites.router, prefix="/api/user", tags=["Favorites"])
+# app.include_router(chat.router, prefix="/api/connect", tags=["Connect"])  # Temporarily disabled due to auth compatibility
+# app.include_router(profile.router, prefix="/api/user", tags=["Profile"])  # Temporarily disabled due to schema conflicts
+app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
+app.include_router(teacher_codes.router, prefix="/api", tags=["Teacher Codes"])
+app.include_router(clerk_webhooks.router, prefix="/api", tags=["Clerk Webhooks"])
+app.include_router(uploads.router, prefix="/api", tags=["Uploads"])
+
+# Serve local uploads (if used)
+try:
+    upload_dir = os.getenv("LOCAL_UPLOAD_DIR", os.path.join(os.getcwd(), "uploads"))
+    os.makedirs(upload_dir, exist_ok=True)
+    app.mount("/uploads", StaticFiles(directory=upload_dir), name="uploads")
+except Exception:
+    pass
 
 if config.NODE_ENV == "production":
     app.add_middleware(
@@ -131,6 +159,9 @@ class SocialAuthRequest(BaseModel):
 class VerifyRequest(BaseModel):
     identifier: str
     verification_code: str
+
+class ClerkExchangeRequest(BaseModel):
+    identifier: str  # email or clerk_user_id
 
 class ResetPasswordRequest(BaseModel):
     identifier: str
@@ -338,53 +369,88 @@ def get_default_scopes_for_role(role: str) -> List[str]:
     }
     return role_scopes.get(role, ["dashboard:read"])
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Get current authenticated user from JWT token"""
+# get_current_user function moved to app.utils.auth to avoid circular imports
+from app.utils.auth import get_current_user as get_current_user_obj
+from app.database import get_db
+from app.models import User
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+from app.clerk_jwt import verify_clerk_jwt
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    """Get current authenticated user from JWT token - supports both custom and backend JWT"""
     try:
         token = credentials.credentials
-        payload = jwt.decode(token, config.JWT_SECRET, algorithms=["HS256"])
+        JWT_SECRET = config.JWT_SECRET
+        
+        # Decode the JWT token
+        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
         
         user_id = payload.get("sub")
         if not user_id:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"error": {"code": "INVALID_TOKEN", "message": "Token missing user ID"}}
+                status_code=401,
+                detail={"error": {"code": "INVALID_TOKEN", "message": "Invalid token payload"}},
+                headers={"WWW-Authenticate": "Bearer"},
             )
         
-        # Get user from database
-        async with db_pool.acquire() as conn:
-            user = await conn.fetchrow(
-                "SELECT u.*, r.name as role FROM users u "
-                "LEFT JOIN user_roles ur ON u.id = ur.user_id "
-                "LEFT JOIN roles r ON ur.role_id = r.id "
-                "WHERE u.id = $1", 
-                uuid.UUID(user_id)
-            )
-            
+        # Try to find user by ID (UUID format)
+        try:
+            user_uuid = uuid.UUID(user_id)
+            user = db.query(User).filter(User.id == user_uuid).first()
+        except ValueError:
+            # If not a valid UUID, it might be a string ID, try direct lookup
+            user = db.query(User).filter(User.id == user_id).first()
+        
         if not user:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"error": {"code": "USER_NOT_FOUND", "message": "User not found"}}
+                status_code=401,
+                detail={"error": {"code": "USER_NOT_FOUND", "message": "User not found"}},
+                headers={"WWW-Authenticate": "Bearer"},
             )
         
+        # Check if user is active
+        if not user.is_active:
+            raise HTTPException(
+                status_code=401,
+                detail={"error": {"code": "USER_INACTIVE", "message": "User account is inactive"}},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        
+        # Get user roles
+        roles = [role.name for role in user.roles]
+        role = roles[0] if roles else "student"
+        
+        # Return dictionary format for main.py compatibility
         return {
-            "id": str(user["id"]),
-            "email": user["email"],
-            "name": user["name"],
-            "role": user["role"] or "student",
-            "scopes": payload.get("scopes", []),
-            "verified": user["verified"]
+            "id": str(user.id),
+            "email": user.email,
+            "name": user.name,
+            "role": role,
+            "verified": user.is_verified
         }
         
     except jwt.ExpiredSignatureError:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"error": {"code": "TOKEN_EXPIRED", "message": "Token has expired"}}
+            status_code=401,
+            detail={"error": {"code": "TOKEN_EXPIRED", "message": "Token has expired"}},
+            headers={"WWW-Authenticate": "Bearer"},
         )
-    except jwt.InvalidTokenError:
+    except jwt.InvalidTokenError as e:
+        logger.error(f"Invalid JWT token: {e}")
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"error": {"code": "INVALID_TOKEN", "message": "Invalid token"}}
+            status_code=401,
+            detail={"error": {"code": "INVALID_TOKEN", "message": "Invalid token"}},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except Exception as e:
+        logger.error(f"Authentication error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": {"code": "INTERNAL_ERROR", "message": "Internal server error"}},
         )
 
 def require_role(*allowed_roles):
@@ -494,16 +560,25 @@ async def register(request: RegisterRequest):
                 detail={"error": {"code": "USER_EXISTS", "message": "User already exists"}}
             )
         
-        # Create user
+        # Create user (use correct column name 'hashed_password')
         password_hash = hash_password(request.password)
         user_id = await conn.fetchval(
-            "INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3) RETURNING id",
+            "INSERT INTO users (email, hashed_password, name) VALUES ($1, $2, $3) RETURNING id",
             request.email, password_hash, request.name
         )
-        
-        # Assign default role (student)
+
+        # Assign default role (prefer 'student' if present otherwise fallback to 'user')
         await conn.execute(
-            "INSERT INTO user_roles (user_id, role_id) VALUES ($1, (SELECT id FROM roles WHERE name = 'student'))",
+            """
+            INSERT INTO user_roles (user_id, role_id)
+            VALUES (
+                $1,
+                COALESCE(
+                    (SELECT id FROM roles WHERE name = 'student'),
+                    (SELECT id FROM roles WHERE name = 'user')
+                )
+            )
+            """,
             user_id
         )
     
@@ -538,7 +613,7 @@ async def login(request: LoginRequest):
             request.identifier
         )
         
-        if not user or not verify_password(request.password, user["password_hash"]):
+        if not user or not verify_password(request.password, user["hashed_password"]):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"error": {"code": "INVALID_CREDENTIALS", "message": "Invalid credentials"}}
@@ -561,7 +636,7 @@ async def login(request: LoginRequest):
         "email": user["email"],
         "name": user["name"],
         "role": role,
-        "verified": user["verified"]
+        "verified": user["is_verified"]
     }
     
     return AuthResponse(
@@ -597,6 +672,104 @@ async def verify_user(request: VerifyRequest):
     access_token = create_access_token(str(user["id"]), "student")
     
     return {"verified": True, "auth_token": access_token}
+
+@app.post("/api/auth/clerk-exchange", response_model=AuthResponse)
+async def clerk_exchange(request: ClerkExchangeRequest):
+    """Exchange a Clerk user (by clerk_user_id or email) for backend JWT."""
+    identifier = request.identifier
+    if not identifier:
+        raise HTTPException(status_code=400, detail={"error": {"code": "BAD_REQUEST", "message": "Missing identifier"}})
+
+    async with db_pool.acquire() as conn:
+        user = await conn.fetchrow(
+            """
+            SELECT u.*, r.name as role
+            FROM users u
+            LEFT JOIN user_roles ur ON u.id = ur.user_id
+            LEFT JOIN roles r ON ur.role_id = r.id
+            WHERE u.clerk_user_id = $1 OR u.email = $1
+            """,
+            identifier
+        )
+
+        if not user:
+            # If user doesn't exist, create them using SQLAlchemy
+            try:
+                # Use SQLAlchemy to create the user
+                from app.database import get_db
+                from app.models import User as UserModel, Role
+                
+                # Get a database session
+                db_gen = get_db()
+                db = next(db_gen)
+                
+                try:
+                    # Create new user
+                    new_user = UserModel(
+                        email=identifier,
+                        name="User",  # Default name
+                        is_verified=True,
+                        is_active=True
+                    )
+                    db.add(new_user)
+                    db.flush()  # Flush to get the ID
+                    
+                    # Explicitly ensure user is active (workaround for database issue)
+                    new_user.is_active = True
+                    
+                    # Assign default role (student)
+                    student_role = db.query(Role).filter(Role.name == "student").first()
+                    if student_role:
+                        new_user.roles.append(student_role)
+                    
+                    db.commit()
+                    
+                    # Now fetch the user using asyncpg
+                    user = await conn.fetchrow(
+                        """
+                        SELECT u.*, r.name as role
+                        FROM users u
+                        LEFT JOIN user_roles ur ON u.id = ur.user_id
+                        LEFT JOIN roles r ON ur.role_id = r.id
+                        WHERE u.id = $1
+                        """,
+                        new_user.id
+                    )
+                    
+                finally:
+                    db.close()
+                    
+                if not user:
+                    raise HTTPException(status_code=500, detail={"error": {"code": "USER_CREATION_FAILED", "message": "Failed to create user"}})
+                    
+            except Exception as e:
+                print(f"Error creating user: {str(e)}")
+                raise HTTPException(status_code=500, detail={"error": {"code": "USER_CREATION_FAILED", "message": "Failed to create user"}})
+
+    role = user["role"] or "student"
+    access_token = create_access_token(str(user["id"]), role)
+    refresh_token = create_refresh_token()
+
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)",
+            user["id"], hash_password(refresh_token), datetime.utcnow() + timedelta(days=config.JWT_REFRESH_TTL)
+        )
+
+    user_data = {
+        "id": str(user["id"]),
+        "email": user["email"],
+        "name": user["name"],
+        "role": role,
+        "verified": user["is_verified"]
+    }
+
+    return AuthResponse(
+        user_id=str(user["id"]),
+        auth_token=access_token,
+        refresh_token=refresh_token,
+        user_data=user_data
+    )
 
 @app.post("/api/auth/reset-password")
 async def reset_password(request: ResetPasswordRequest):
@@ -671,26 +844,85 @@ async def get_dashboard(current_user: dict = Depends(get_current_user)):
     
     return dashboard_data
 
+# Course modules endpoint
+@app.get("/api/courses/{course_id}/modules")
+async def get_course_modules(course_id: int, current_user: dict = Depends(get_current_user)):
+    async with db_pool.acquire() as conn:
+        modules = await conn.fetch(
+            """
+            SELECT m.id, m.title, m.description, m.order, m.chapter_id,
+                   m.content, m.key_verses, m.key_verses_ref, m.key_verses_json,
+                   m.lesson_study, m.lesson_study_ref, m.response_prompt,
+                   m.music_selection, m.further_study, m.further_study_json,
+                   m.personal_experiences, m.resources, m.resources_json,
+                   m.artwork, m.header_image_url, m.media_url, m.quiz,
+                   m.course_id
+            FROM modules m
+            WHERE m.course_id = $1
+            ORDER BY m.order
+            """,
+            course_id
+        )
+        
+        return [dict(module) for module in modules]
+
 # Progress endpoints
 @app.post("/api/learn/progress")
 async def update_progress(request: ProgressRequest, current_user: dict = Depends(get_current_user)):
     async with db_pool.acquire() as conn:
-        # Update or insert progress
-        await conn.execute(
-            """
-            INSERT INTO user_course_progress (user_id, course_id, last_visited_module_id, last_visited_at, progress_percentage)
-            VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (user_id, course_id) 
-            DO UPDATE SET 
-                last_visited_module_id = EXCLUDED.last_visited_module_id,
-                last_visited_at = EXCLUDED.last_visited_at,
-                progress_percentage = EXCLUDED.progress_percentage
-            """,
-            uuid.UUID(current_user["id"]), request.course_id, request.module_id,
-            datetime.utcnow(), 75  # Mock progress calculation
+        # Calculate real progress based on modules completed
+        course_id = int(request.course_id)
+        module_id = int(request.module_id)
+        
+        # Get total modules in the course
+        total_modules = await conn.fetchval(
+            "SELECT COUNT(*) FROM modules WHERE course_id = $1",
+            course_id
         )
+        
+        # Get current progress
+        current_progress = await conn.fetchrow(
+            "SELECT progress_percentage FROM user_course_progress WHERE user_id = $1 AND course_id = $2",
+            uuid.UUID(current_user["id"]), course_id
+        )
+        
+        # Calculate progress: each module completion is worth (100 / total_modules)%
+        if total_modules > 0:
+            module_progress = int(100 / total_modules)
+            new_progress = (current_progress["progress_percentage"] if current_progress else 0) + module_progress
+            new_progress = min(new_progress, 100)  # Cap at 100%
+        else:
+            new_progress = 100  # If no modules, mark as complete
+        
+        # Check if progress record exists
+        existing_progress = await conn.fetchrow(
+            "SELECT id FROM user_course_progress WHERE user_id = $1 AND course_id = $2",
+            uuid.UUID(current_user["id"]), course_id
+        )
+        
+        if existing_progress:
+            # Update existing progress
+            await conn.execute(
+                """
+                UPDATE user_course_progress 
+                SET last_visited_module_id = $3, last_visited_at = $4, progress_percentage = $5
+                WHERE user_id = $1 AND course_id = $2
+                """,
+                uuid.UUID(current_user["id"]), course_id, module_id,
+                datetime.utcnow(), new_progress
+            )
+        else:
+            # Insert new progress
+            await conn.execute(
+                """
+                INSERT INTO user_course_progress (user_id, course_id, last_visited_module_id, last_visited_at, progress_percentage)
+                VALUES ($1, $2, $3, $4, $5)
+                """,
+                uuid.UUID(current_user["id"]), course_id, module_id,
+                datetime.utcnow(), new_progress
+            )
     
-    return {"success": True, "updated_progress_percentage": 75}
+    return {"success": True, "updated_progress_percentage": new_progress}
 
 # Favourites endpoints
 @app.post("/api/user/favourites/{lesson_id}")
@@ -890,55 +1122,19 @@ async def send_message(request: MessageRequest, current_user: dict = Depends(get
 # Profile endpoints
 @app.get("/api/user/profile")
 async def get_profile(current_user: dict = Depends(get_current_user)):
-    async with db_pool.acquire() as conn:
-        user = await conn.fetchrow(
-            "SELECT name, email, created_at FROM users WHERE id = $1",
-            uuid.UUID(current_user["id"])
-        )
-        
-        # Get completed courses count
-        completed_courses = await conn.fetchval(
-            "SELECT COUNT(*) FROM user_course_progress WHERE user_id = $1 AND progress_percentage = 100",
-            uuid.UUID(current_user["id"])
-        )
-    
     return {
-        "name": user["name"],
-        "email": user["email"],
-        "joined_date": user["created_at"].isoformat(),
-        "total_courses_completed": completed_courses or 0
+        "id": current_user["id"],
+        "name": current_user["name"],
+        "email": current_user["email"],
+        "role": current_user["role"],
+        "verified": current_user["verified"]
     }
 
-@app.put("/api/user/profile")
-async def update_profile(request: ProfileUpdateRequest, current_user: dict = Depends(get_current_user)):
-    async with db_pool.acquire() as conn:
-        # Build dynamic update query
-        updates = []
-        params = []
-        param_index = 1
-        
-        if request.name is not None:
-            updates.append(f"name = ${param_index}")
-            params.append(request.name)
-            param_index += 1
-        
-        if not updates:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": {"code": "NO_UPDATES", "message": "No updates provided"}}
-            )
-        
-        # Add user_id parameter
-        params.append(uuid.UUID(current_user["id"]))
-        
-        query = f"UPDATE users SET {', '.join(updates)}, updated_at = now() WHERE id = ${param_index} RETURNING name, email, created_at"
-        user = await conn.fetchrow(query, *params)
-    
-    return {
-        "name": user["name"],
-        "email": user["email"],
-        "joined_date": user["created_at"].isoformat()
-    }
+# Chat endpoints (simplified for compatibility)
+@app.get("/api/connect/history")
+async def get_chat_history(current_user: dict = Depends(get_current_user)):
+    # Return empty chat history for now
+    return []
 
 # Notes endpoints
 @app.get("/api/user/notes")

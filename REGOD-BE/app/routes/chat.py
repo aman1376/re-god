@@ -7,7 +7,7 @@ from datetime import datetime
 from app.database import get_db
 from app.models import User, ChatThread, ChatMessage, StudentTeacherAccess
 from app.schemas import ThreadResponse, MessageResponse, MessageBase
-from app.auth import get_current_user
+from app.utils.auth import get_current_user
 from app.rbac import require_permission
 
 router = APIRouter()
@@ -199,7 +199,7 @@ async def websocket_endpoint(
     """WebSocket endpoint for real-time chat"""
     try:
         # Authenticate user
-        from app.auth import get_current_user_from_token
+        from app.utils.auth import get_current_user_from_token
         user = await get_current_user_from_token(token, db)
         
         await websocket.accept()
@@ -224,7 +224,7 @@ async def websocket_endpoint(
 
 async def get_current_user_from_token(token: str, db: Session):
     """Helper function to get user from token for WebSocket"""
-    from app.auth import get_current_user
+    from app.utils.auth import get_current_user
     from fastapi import Header
     # Simplified implementation - in production, use proper JWT verification
     try:

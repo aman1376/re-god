@@ -20,8 +20,10 @@ import { setAudioModeAsync } from 'expo-audio';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
+import { useSignIn, useSignUp, isClerkAPIResponseError } from '@clerk/clerk-expo';
 import { useAuth } from './contexts/AuthContext';
 import Logo from '../assets/images/logo.png';
+import ApiService from './services/api';
 import GoogleLogo from '../components/GoogleLogo';
 
 const { width, height } = Dimensions.get('window');
@@ -39,8 +41,13 @@ export default function AuthScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const fadeAnim = useRef(new Animated.Value(1)).current;
   const [hasFaded, setHasFaded] = useState(false);
+  const [showClerkVerify, setShowClerkVerify] = useState(false);
+  const [clerkCode, setClerkCode] = useState('');
+  const [emailForClerk, setEmailForClerk] = useState('');
 
-  const { login, register, error, clearError, isAuthenticated } = useAuth();
+  const { login, register, error, clearError, isAuthenticated, socialLogin } = useAuth();
+  const signUpCtx = useSignUp();
+  const signInCtx = useSignIn();
 
   // Your existing video player setup code remains the same
   const player = useVideoPlayer(require('@/assets/videos/Re-God video h264.mov'), (player) => {
@@ -122,9 +129,16 @@ export default function AuthScreen() {
     }
   }, [stage]);
 
-  const handleSocialLogin = async (provider: string) => {
-    Alert.alert('Social Login', `${provider} login will be implemented soon`);
-    // TODO: Implement social login with your backend
+  const handleSocialLogin = async (provider: 'google' | 'apple' | 'facebook') => {
+    try {
+      setIsLoading(true);
+      await socialLogin(provider);
+      // Navigation will happen automatically via useEffect when isAuthenticated becomes true
+    } catch (err) {
+      Alert.alert(`${provider} Login Failed`, error || 'Something went wrong');
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleCreateAccount = async () => {
@@ -149,6 +163,61 @@ export default function AuthScreen() {
     }
   };
 
+  // Clerk email verification flow (email code)
+  const handleClerkEmailSignup = async () => {
+    if (!email.trim()) {
+      Alert.alert('Error', 'Please enter your email');
+      return;
+    }
+    try {
+      setIsLoading(true);
+      setEmailForClerk(email.trim());
+      // Split full name into first and last (best-effort)
+      const full = (name || '').trim();
+      const [firstName, ...rest] = full.split(/\s+/);
+      const lastName = rest.join(' ');
+
+      await signUpCtx?.signUp?.create({
+        emailAddress: email.trim(),
+        password: password || undefined,
+        ...(firstName ? { firstName } : {}),
+        ...(lastName ? { lastName } : {}),
+      });
+      await signUpCtx?.signUp?.prepareEmailAddressVerification({ strategy: 'email_code' });
+      setShowClerkVerify(true);
+    } catch (e: any) {
+      const msg = isClerkAPIResponseError(e) ? e.errors?.[0]?.message || 'Verification error' : 'Verification error';
+      Alert.alert('Clerk Sign up', msg);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleVerifyClerkCode = async () => {
+    try {
+      setIsLoading(true);
+      const res = await signUpCtx?.signUp?.attemptEmailAddressVerification({ code: clerkCode });
+      if (res && res.status === 'complete' && res.createdSessionId) {
+        await signUpCtx?.setActive?.({ session: res.createdSessionId });
+        // Exchange Clerk identity for backend JWT so dashboard calls succeed
+        try {
+          await ApiService.clerkExchange(emailForClerk || email.trim());
+          console.log('Clerk exchange successful for sign up');
+        } catch (exchangeError) {
+          console.error('Clerk exchange failed for sign up:', exchangeError);
+          // Don't fail the sign up process, but log the error
+        }
+        setShowClerkVerify(false);
+        router.replace('/(tabs)/course');
+      }
+    } catch (e: any) {
+      const msg = isClerkAPIResponseError(e) ? e.errors?.[0]?.message || 'Invalid code' : 'Invalid code';
+      Alert.alert('Verification', msg);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleSignIn = async () => {
     if (!email.trim() || !password.trim()) {
       Alert.alert('Error', 'Please enter email and password');
@@ -157,10 +226,24 @@ export default function AuthScreen() {
 
     try {
       setIsLoading(true);
-      await login(email.trim(), password);
-      // Navigation will happen automatically via useEffect when isAuthenticated becomes true
-    } catch (err) {
-      Alert.alert('Login Failed', error || 'Invalid email or password');
+      // Clerk password sign-in
+      const res: any = await signInCtx?.signIn?.create({ identifier: email.trim(), password });
+      if (res && res.status === 'complete' && res.createdSessionId) {
+        await signInCtx?.setActive?.({ session: res.createdSessionId });
+        try {
+          await ApiService.clerkExchange(email.trim());
+          console.log('Clerk exchange successful for sign in');
+        } catch (exchangeError) {
+          console.error('Clerk exchange failed for sign in:', exchangeError);
+          // Don't fail the sign in process, but log the error
+        }
+        router.replace('/(tabs)/course');
+        return;
+      }
+      Alert.alert('Login', 'Unable to complete sign in');
+    } catch (e: any) {
+      const msg = isClerkAPIResponseError(e) ? e.errors?.[0]?.message || 'Invalid credentials' : 'Invalid credentials';
+      Alert.alert('Login Failed', msg);
     } finally {
       setIsLoading(false);
     }
@@ -400,7 +483,8 @@ export default function AuthScreen() {
                   <View style={styles.socialButtonsContainer}>
                     <TouchableOpacity
                       style={styles.socialButton}
-                      onPress={() => handleSocialLogin('Google')}
+                      onPress={() => handleSocialLogin('google')}
+                      disabled={isLoading}
                     >
                       <GoogleLogo size={20} />
                       <Text style={styles.socialButtonText}>Sign in with Google</Text>
@@ -408,7 +492,8 @@ export default function AuthScreen() {
 
                     <TouchableOpacity
                       style={styles.socialButton}
-                      onPress={() => handleSocialLogin('Apple')}
+                      onPress={() => handleSocialLogin('apple')}
+                      disabled={isLoading}
                     >
                       <Ionicons name="logo-apple" size={20} color="#FFFFFF" />
                       <Text style={styles.socialButtonText}>Sign in with Apple</Text>
@@ -416,22 +501,49 @@ export default function AuthScreen() {
 
                     <TouchableOpacity
                       style={styles.socialButton}
-                      onPress={() => handleSocialLogin('Facebook')}
+                      onPress={() => handleSocialLogin('facebook')}
+                      disabled={isLoading}
                     >
                       <Ionicons name="logo-facebook" size={20} color="#1877F2" />
                       <Text style={styles.socialButtonText}>Sign in with Facebook</Text>
                     </TouchableOpacity>
                   </View>
 
-                  <TouchableOpacity
-                    style={[styles.createAccountButton, isLoading && { opacity: 0.7 }]}
-                    onPress={handleCreateAccount}
-                    disabled={isLoading}
-                  >
-                    <Text style={styles.createAccountButtonText}>
-                      {isLoading ? 'Creating account...' : 'Create account'}
-                    </Text>
-                  </TouchableOpacity>
+                  {/* Clerk hosted email verification flow */}
+                  {!showClerkVerify && (
+                    <TouchableOpacity
+                      style={[styles.createAccountButton, isLoading && { opacity: 0.7 }]}
+                      onPress={handleClerkEmailSignup}
+                      disabled={isLoading}
+                    >
+                      <Text style={styles.createAccountButtonText}>
+                        {isLoading ? 'Sending code...' : 'Create account'}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+
+                  {showClerkVerify && (
+                    <View style={{ marginBottom: 12 }}>
+                      <Text style={{ color: 'white', marginBottom: 6 }}>Enter verification code sent to {emailForClerk}</Text>
+                      <View style={styles.inputContainer}>
+                        <TextInput
+                          style={styles.input}
+                          placeholder="6-digit code"
+                          placeholderTextColor="rgba(128, 128, 128, 0.7)"
+                          value={clerkCode}
+                          onChangeText={setClerkCode}
+                          keyboardType="number-pad"
+                        />
+                      </View>
+                      <TouchableOpacity
+                        style={[styles.primaryButton, isLoading && { opacity: 0.7 }]}
+                        onPress={handleVerifyClerkCode}
+                        disabled={isLoading}
+                      >
+                        <Text style={styles.primaryButtonText}>{isLoading ? 'Verifying...' : 'Verify & Continue'}</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
 
                   <View style={styles.switchRow}>
                     <Text style={styles.switchText}>Already have an account? </Text>

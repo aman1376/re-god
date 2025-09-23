@@ -85,10 +85,10 @@ async def handle_user_created(user_data: dict, db: Session):
         db.add(user)
         db.flush()  # Flush to get the user ID
         
-        # Assign default student role
-        student_role = db.query(Role).filter(Role.name == "student").first()
-        if student_role:
-            user.roles.append(student_role)
+        # Assign default role: prefer 'student', fallback to 'user'
+        role = db.query(Role).filter(Role.name.in_(["student", "user"])).order_by(Role.name == "student").first()
+        if role:
+            user.roles.append(role)
         
         db.commit()
         

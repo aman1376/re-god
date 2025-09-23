@@ -5,7 +5,7 @@ from typing import List
 from app.database import get_db
 from app.models import User, UserFavorite, Module
 from app.schemas import FavoriteResponse
-from app.auth import get_current_user
+from app.utils.auth import get_current_user
 from app.rbac import require_permission
 
 router = APIRouter()

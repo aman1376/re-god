@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional, List
+from typing import Optional, List, Any
 from datetime import datetime
 
 # Auth Schemas
@@ -151,9 +151,21 @@ class CourseBase(BaseModel):
 class CourseResponse(CourseBase):
     id: int
     total_modules: int
-    created_by: int
+    created_by: str
     created_at: datetime
     
+    class Config:
+        from_attributes = True
+
+class ChapterBase(BaseModel):
+    title: str
+    cover_image_url: Optional[str] = None
+    order: int
+    quiz: Optional[Any] = None
+
+class ChapterResponse(ChapterBase):
+    id: int
+    course_id: int
     class Config:
         from_attributes = True
 
@@ -161,6 +173,25 @@ class ModuleBase(BaseModel):
     title: str
     description: Optional[str] = None
     order: int
+    chapter_id: Optional[int] = None
+    # Extended lesson fields
+    content: Optional[str] = None
+    key_verses: Optional[str] = None
+    key_verses_ref: Optional[str] = None
+    key_verses_json: Optional[Any] = None
+    lesson_study: Optional[str] = None
+    lesson_study_ref: Optional[str] = None
+    response_prompt: Optional[str] = None
+    music_selection: Optional[str] = None
+    further_study: Optional[str] = None
+    further_study_json: Optional[Any] = None
+    personal_experiences: Optional[str] = None
+    resources: Optional[str] = None
+    resources_json: Optional[Any] = None
+    artwork: Optional[str] = None
+    header_image_url: Optional[str] = None
+    media_url: Optional[str] = None  # consolidated audio/video URL
+    quiz: Optional[Any] = None
 
 class ModuleResponse(ModuleBase):
     id: int

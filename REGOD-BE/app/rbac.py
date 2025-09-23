@@ -4,7 +4,7 @@ from functools import wraps
 from typing import List, Callable, Any
 from app.database import get_db
 from app.models import User, Role, Permission
-from app.auth import get_current_user  # Clerk-based auth
+from app.utils.auth import get_current_user  # Local JWT-based auth
 
 # =========================
 # Permission constants
@@ -93,8 +93,10 @@ def require_permission(permission_name: str):
     return decorator
 
 
-def require_role(role_name: str):
-    """Require a specific role for an endpoint"""
+from typing import Union
+
+def require_role(role_name: Union[str, list[str]]):
+    """Require a specific role (or any of a list of roles) for an endpoint"""
     def decorator(func: Callable):
         @wraps(func)
         async def wrapper(
@@ -108,11 +110,11 @@ def require_role(role_name: str):
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Authentication required"
                 )
-
-            if not current_user.has_role(role_name):
+            roles_to_check = role_name if isinstance(role_name, list) else [role_name]
+            if not any(current_user.has_role(r) for r in roles_to_check):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Role '{role_name}' required"
+                    detail=f"Role '{roles_to_check}' required"
                 )
 
             return await func(*args, current_user=current_user, db=db, **kwargs)

@@ -54,5 +54,35 @@ class ClerkAuth:
                 detail=f"Error creating user in Clerk: {str(e)}"
             )
 
+    def create_invitation(self, email_address: str, redirect_url: str | None = None) -> Optional[dict]:
+        """Create an invitation in Clerk (sends email with signup link)."""
+        try:
+            payload = {"email_address": email_address}
+            if redirect_url:
+                payload["redirect_url"] = redirect_url
+            response = requests.post(
+                f"{self.api_url}/invitations",
+                headers=self.headers,
+                json=payload,
+            )
+            if response.status_code in (200, 201):
+                return response.json()
+            # Bubble up Clerk error details if present
+            try:
+                err = response.json()
+            except Exception:
+                err = {"error": response.text}
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Clerk invitation failed: {err}"
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Error creating Clerk invitation: {str(e)}"
+            )
+
 # Initialize Clerk client
 clerk_client = ClerkAuth()
