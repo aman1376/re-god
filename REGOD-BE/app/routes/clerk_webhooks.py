@@ -92,6 +92,9 @@ async def handle_user_created(user_data: dict, db: Session):
         
         db.commit()
         
+        # Note: Teacher code assignment will be handled by the frontend
+        # after the user is created, using the useTeacherCode endpoint
+        
     except Exception as e:
         # Log error but don't break the webhook
         print(f"Error handling user.created event: {str(e)}")

@@ -20,15 +20,16 @@ import { setAudioModeAsync } from 'expo-audio';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { useSignIn, useSignUp, isClerkAPIResponseError } from '@clerk/clerk-expo';
-import { useAuth } from './contexts/AuthContext';
+import { useSignIn, useSignUp, isClerkAPIResponseError, useOAuth } from '@clerk/clerk-expo';
+import { useAuth } from '../src/contexts/AuthContext';
 import Logo from '../assets/images/logo.png';
-import ApiService from './services/api';
+import ApiService from '../src/services/api';
 import GoogleLogo from '../components/GoogleLogo';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width, height } = Dimensions.get('window');
 
-type AuthStage = 'splash' | 'login' | 'onboarding1' | 'onboarding2' | 'onboarding3' | 'signup';
+type AuthStage = 'splash' | 'login' | 'onboarding1' | 'onboarding2' | 'onboarding3' | 'signup' | 'forgot-password' | 'reset-password';
 
 export default function AuthScreen() {
   const [teacherCode, setTeacherCode] = useState('');
@@ -44,10 +45,18 @@ export default function AuthScreen() {
   const [showClerkVerify, setShowClerkVerify] = useState(false);
   const [clerkCode, setClerkCode] = useState('');
   const [emailForClerk, setEmailForClerk] = useState('');
+  const [resetCode, setResetCode] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
 
   const { login, register, error, clearError, isAuthenticated, socialLogin } = useAuth();
   const signUpCtx = useSignUp();
   const signInCtx = useSignIn();
+  
+  // OAuth hooks for social login
+  const { startOAuthFlow: startGoogleOAuth } = useOAuth({ strategy: 'oauth_google' });
+  const { startOAuthFlow: startAppleOAuth } = useOAuth({ strategy: 'oauth_apple' });
+  const { startOAuthFlow: startFacebookOAuth } = useOAuth({ strategy: 'oauth_facebook' });
 
   // Your existing video player setup code remains the same
   const player = useVideoPlayer(require('@/assets/videos/Re-God video h264.mov'), (player) => {
@@ -109,12 +118,7 @@ export default function AuthScreen() {
     }
   }, [player]);
 
-  // Redirect if authenticated
-  useEffect(() => {
-    if (isAuthenticated) {
-      router.replace('/(tabs)/course');
-    }
-  }, [isAuthenticated]);
+  // Note: Navigation is handled by the main index.tsx file
 
   // Clear error when stage changes
   useEffect(() => {
@@ -132,10 +136,50 @@ export default function AuthScreen() {
   const handleSocialLogin = async (provider: 'google' | 'apple' | 'facebook') => {
     try {
       setIsLoading(true);
-      await socialLogin(provider);
-      // Navigation will happen automatically via useEffect when isAuthenticated becomes true
-    } catch (err) {
-      Alert.alert(`${provider} Login Failed`, error || 'Something went wrong');
+      console.log(`Starting ${provider} OAuth flow...`);
+      
+      // Select the appropriate OAuth flow based on provider
+      const startOAuthFlow = provider === 'google' ? startGoogleOAuth :
+                             provider === 'apple' ? startAppleOAuth :
+                             startFacebookOAuth;
+      
+      // Start OAuth flow
+      const { createdSessionId, signIn, signUp, setActive } = await startOAuthFlow();
+      
+      if (createdSessionId) {
+        // Set the active session in Clerk
+        await setActive?.({ session: createdSessionId });
+        
+        // Get user email from the OAuth response
+        const userEmail = signIn?.identifier || signUp?.emailAddress;
+        
+        if (userEmail) {
+          console.log(`${provider} OAuth successful, exchanging token...`);
+          
+          // Exchange Clerk token for backend token
+          const authResponse = await ApiService.clerkExchange(userEmail);
+          
+          // Store tokens in AsyncStorage
+          await AsyncStorage.setItem('regod_access_token', authResponse.auth_token);
+          await AsyncStorage.setItem('regod_refresh_token', authResponse.refresh_token);
+          
+          if (authResponse.user_data) {
+            await AsyncStorage.setItem('regod_user_data', JSON.stringify(authResponse.user_data));
+          }
+          
+          console.log(`${provider} login complete, user authenticated`);
+          
+          // Navigation will happen automatically via useEffect when isAuthenticated becomes true
+        } else {
+          throw new Error('No email found in OAuth response');
+        }
+      } else {
+        throw new Error(`${provider} authentication was not completed`);
+      }
+    } catch (err: any) {
+      console.error(`${provider} login error:`, err);
+      const errorMessage = err?.message || `${provider} login failed`;
+      Alert.alert(`${provider} Login Failed`, errorMessage);
     } finally {
       setIsLoading(false);
     }
@@ -144,6 +188,11 @@ export default function AuthScreen() {
   const handleCreateAccount = async () => {
     if (!name.trim()) {
       Alert.alert('Error', 'Please enter your name');
+      return;
+    }
+    
+    if (!teacherCode.trim()) {
+      Alert.alert('Error', 'Please enter a teacher code');
       return;
     }
     
@@ -199,16 +248,22 @@ export default function AuthScreen() {
       const res = await signUpCtx?.signUp?.attemptEmailAddressVerification({ code: clerkCode });
       if (res && res.status === 'complete' && res.createdSessionId) {
         await signUpCtx?.setActive?.({ session: res.createdSessionId });
-        // Exchange Clerk identity for backend JWT so dashboard calls succeed
-        try {
-          await ApiService.clerkExchange(emailForClerk || email.trim());
-          console.log('Clerk exchange successful for sign up');
-        } catch (exchangeError) {
-          console.error('Clerk exchange failed for sign up:', exchangeError);
-          // Don't fail the sign up process, but log the error
+        
+        // Only attempt clerk exchange if we don't already have valid tokens
+        const existingToken = await AsyncStorage.getItem('regod_access_token');
+        if (!existingToken) {
+          try {
+            await ApiService.clerkExchange(emailForClerk || email.trim());
+            console.log('Clerk exchange successful for sign up');
+          } catch (exchangeError) {
+            console.error('Clerk exchange failed for sign up:', exchangeError);
+            // Don't fail the sign up process, but log the error
+          }
+        } else {
+          console.log('User already has valid tokens, skipping clerk exchange');
         }
         setShowClerkVerify(false);
-        router.replace('/(tabs)/course');
+        // Navigation will be handled by index.tsx
       }
     } catch (e: any) {
       const msg = isClerkAPIResponseError(e) ? e.errors?.[0]?.message || 'Invalid code' : 'Invalid code';
@@ -230,14 +285,21 @@ export default function AuthScreen() {
       const res: any = await signInCtx?.signIn?.create({ identifier: email.trim(), password });
       if (res && res.status === 'complete' && res.createdSessionId) {
         await signInCtx?.setActive?.({ session: res.createdSessionId });
-        try {
-          await ApiService.clerkExchange(email.trim());
-          console.log('Clerk exchange successful for sign in');
-        } catch (exchangeError) {
-          console.error('Clerk exchange failed for sign in:', exchangeError);
-          // Don't fail the sign in process, but log the error
+        
+        // Only attempt clerk exchange if we don't already have valid tokens
+        const existingToken = await AsyncStorage.getItem('regod_access_token');
+        if (!existingToken) {
+          try {
+            await ApiService.clerkExchange(email.trim());
+            console.log('Clerk exchange successful for sign in');
+          } catch (exchangeError) {
+            console.error('Clerk exchange failed for sign in:', exchangeError);
+            // Don't fail the sign in process, but log the error
+          }
+        } else {
+          console.log('User already has valid tokens, skipping clerk exchange');
         }
-        router.replace('/(tabs)/course');
+        // Navigation will be handled by index.tsx
         return;
       }
       Alert.alert('Login', 'Unable to complete sign in');
@@ -249,9 +311,89 @@ export default function AuthScreen() {
     }
   };
 
-  const handleForgotPassword = () => {
-    Alert.alert('Forgot Password', 'Password reset will be implemented soon');
-    // TODO: Implement forgot password
+  const handleForgotPassword = async () => {
+    if (!email.trim()) {
+      Alert.alert('Email Required', 'Please enter your email address first');
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      // Use Clerk's password reset functionality
+      if (signInCtx?.signIn) {
+        await signInCtx.signIn.create({ strategy: 'reset_password_email_code', identifier: email.trim() });
+        // Navigate to reset password screen instead of showing alert
+        setStage('reset-password');
+      } else {
+        Alert.alert('Error', 'Password reset is not available at the moment');
+      }
+    } catch (e: any) {
+      const msg = isClerkAPIResponseError(e) ? e.errors?.[0]?.message || 'Failed to send reset email' : 'Failed to send reset email';
+      Alert.alert('Reset Failed', msg);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleResetPassword = async () => {
+    if (!resetCode.trim()) {
+      Alert.alert('Reset Code Required', 'Please enter the reset code from your email');
+      return;
+    }
+
+    if (!newPassword.trim()) {
+      Alert.alert('Password Required', 'Please enter a new password');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      Alert.alert('Password Mismatch', 'Passwords do not match');
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      Alert.alert('Password Too Short', 'Password must be at least 6 characters long');
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      // Use Clerk's password reset with code
+      if (signInCtx?.signIn) {
+        const result = await signInCtx.signIn.attemptFirstFactor({
+          strategy: 'reset_password_email_code',
+          code: resetCode.trim(),
+          password: newPassword.trim(),
+        });
+
+        if (result.status === 'complete') {
+          Alert.alert(
+            'Password Reset Successful',
+            'Your password has been reset successfully. You can now sign in with your new password.',
+            [
+              {
+                text: 'OK',
+                onPress: () => {
+                  setStage('login');
+                  setResetCode('');
+                  setNewPassword('');
+                  setConfirmPassword('');
+                }
+              }
+            ]
+          );
+        } else {
+          Alert.alert('Reset Failed', 'Invalid reset code or password reset failed');
+        }
+      } else {
+        Alert.alert('Error', 'Password reset is not available at the moment');
+      }
+    } catch (e: any) {
+      const msg = isClerkAPIResponseError(e) ? e.errors?.[0]?.message || 'Password reset failed' : 'Password reset failed';
+      Alert.alert('Reset Failed', msg);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // Your existing render logic remains mostly the same, just update the buttons:
@@ -333,6 +475,7 @@ export default function AuthScreen() {
                       />
                     </TouchableOpacity>
                   </View>
+
                   <View style={styles.rememberForgotContainer}>
                     <TouchableOpacity
                       style={styles.rememberMeContainer}
@@ -356,6 +499,37 @@ export default function AuthScreen() {
                       {isLoading ? 'Signing in...' : 'Sign in'}
                     </Text>
                   </TouchableOpacity>
+
+                  {/* Social Sign-in Buttons */}
+                  <View style={styles.socialButtonsContainer}>
+                    <TouchableOpacity
+                      style={styles.socialButton}
+                      onPress={() => handleSocialLogin('google')}
+                      disabled={isLoading}
+                    >
+                      <GoogleLogo size={20} />
+                      <Text style={styles.socialButtonText}>Sign in with Google</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.socialButton}
+                      onPress={() => handleSocialLogin('apple')}
+                      disabled={isLoading}
+                    >
+                      <Ionicons name="logo-apple" size={20} color="#FFFFFF" />
+                      <Text style={styles.socialButtonText}>Sign in with Apple</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.socialButton}
+                      onPress={() => handleSocialLogin('facebook')}
+                      disabled={isLoading}
+                    >
+                      <Ionicons name="logo-facebook" size={20} color="#1877F2" />
+                      <Text style={styles.socialButtonText}>Sign in with Facebook</Text>
+                    </TouchableOpacity>
+                  </View>
+
                   <TouchableOpacity onPress={() => setStage('onboarding1')}>
                     <Text style={styles.linkButtonText}>Create account</Text>
                   </TouchableOpacity>
@@ -419,7 +593,7 @@ export default function AuthScreen() {
                   <View style={styles.inputContainer}>
                     <TextInput
                       style={styles.input}
-                      placeholder="Teacher's Code (Optional)"
+                      placeholder="Teacher's Code (Required)"
                       placeholderTextColor="rgba(128, 128, 128, 0.7)"
                       value={teacherCode}
                       onChangeText={setTeacherCode}
@@ -461,22 +635,6 @@ export default function AuthScreen() {
                         size={20}
                         color="rgba(128, 128, 128, 0.7)"
                       />
-                    </TouchableOpacity>
-                  </View>
-
-                  <View style={styles.rememberForgotContainer}>
-                    <TouchableOpacity
-                      style={styles.rememberMeContainer}
-                      onPress={() => setRememberMe(!rememberMe)}
-                    >
-                      <View style={[styles.checkbox, rememberMe && styles.checkboxChecked]}>
-                        {rememberMe && <View style={styles.checkmark} />}
-                      </View>
-                      <Text style={styles.rememberMeText}>Remember me</Text>
-                    </TouchableOpacity>
-                    
-                    <TouchableOpacity onPress={handleForgotPassword}>
-                      <Text style={styles.forgotPasswordText}>Forgot password</Text>
                     </TouchableOpacity>
                   </View>
 
@@ -555,6 +713,95 @@ export default function AuthScreen() {
                   <View style={styles.musicCreditContainer}>
                     <Text style={[styles.musicCreditText, { fontWeight: 'bold', color: '#FFFFFF' }]}>Music</Text>
                     <Text style={styles.musicCreditText}>&quot;Eliza&apos;s Morning Wander&quot; by Matt Minikus</Text>
+                  </View>
+                </View>
+              </View>
+            )}
+
+            {/* Reset Password Screen */}
+            {stage === 'reset-password' && (
+              <View style={styles.formContainer}>
+                <View style={[styles.logoContainer, { marginTop: 18, marginBottom: 12 }]}>
+                  <Image source={Logo} style={styles.logo} />
+                </View>
+
+                <View style={styles.formContainer}>
+                  <Text style={styles.resetPasswordTitle}>Reset Your Password</Text>
+                  <Text style={styles.resetPasswordSubtitle}>
+                    We've sent a reset code to {email}. Please enter the code and your new password below.
+                  </Text>
+
+                  <View style={styles.inputContainer}>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Reset Code"
+                      placeholderTextColor="rgba(128, 128, 128, 0.7)"
+                      value={resetCode}
+                      onChangeText={setResetCode}
+                      keyboardType="number-pad"
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                    />
+                  </View>
+
+                  <View style={styles.inputContainer}>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="New Password"
+                      placeholderTextColor="rgba(128, 128, 128, 0.7)"
+                      value={newPassword}
+                      onChangeText={setNewPassword}
+                      secureTextEntry={!showPassword}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                    />
+                    <TouchableOpacity
+                      style={styles.eyeIcon}
+                      onPress={() => setShowPassword(!showPassword)}
+                    >
+                      <Ionicons
+                        name={showPassword ? 'eye-off' : 'eye'}
+                        size={20}
+                        color="rgba(128, 128, 128, 0.7)"
+                      />
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={styles.inputContainer}>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Confirm New Password"
+                      placeholderTextColor="rgba(128, 128, 128, 0.7)"
+                      value={confirmPassword}
+                      onChangeText={setConfirmPassword}
+                      secureTextEntry={!showPassword}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                    />
+                  </View>
+
+                  <TouchableOpacity
+                    style={[styles.primaryButton, isLoading && { opacity: 0.7 }]}
+                    onPress={handleResetPassword}
+                    disabled={isLoading}
+                  >
+                    <Text style={styles.primaryButtonText}>
+                      {isLoading ? 'Resetting...' : 'Reset Password'}
+                    </Text>
+                  </TouchableOpacity>
+
+                  <View style={styles.switchRow}>
+                    <Text style={styles.switchText}>Remember your password? </Text>
+                    <TouchableOpacity onPress={() => setStage('login')}>
+                      <Text style={styles.linkButtonText}>Sign in</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={styles.switchRow}>
+                    <Text style={styles.switchText}>Didn't receive the code? </Text>
+                    <TouchableOpacity onPress={handleForgotPassword}>
+                      <Text style={styles.linkButtonText}>Resend</Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
               </View>
@@ -789,5 +1036,19 @@ const styles = StyleSheet.create({
     color: 'rgba(255, 255, 255, 0.8)',
     fontSize: 12,
     textAlign: 'center',
+  },
+  resetPasswordTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: 'white',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  resetPasswordSubtitle: {
+    fontSize: 16,
+    color: 'rgba(255, 255, 255, 0.8)',
+    textAlign: 'center',
+    marginBottom: 24,
+    lineHeight: 22,
   },
 });

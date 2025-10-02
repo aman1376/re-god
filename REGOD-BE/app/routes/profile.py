@@ -11,35 +11,70 @@ from app.rbac import require_permission
 router = APIRouter()
 
 @router.get("/profile", response_model=UserResponse)
-async def get_user_profile(current_user: User = Depends(get_current_user)):
+async def get_user_profile(
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Get current user profile"""
-    return current_user
+    print("[PROFILE] Profile endpoint called!")
+    # Get the actual User model from database to include all fields like avatar_url
+    user_id = current_user["id"]
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    print(f"[PROFILE] User data: id={user.id}, name={user.name}, email={user.email}, avatar_url={user.avatar_url}")
+    
+    # Convert to UserResponse format
+    user_response = UserResponse(
+        id=str(user.id),
+        name=user.name,
+        email=user.email,
+        phone=user.phone,
+        avatar_url=user.avatar_url,
+        is_verified=user.is_verified,
+        onboarding_completed=user.onboarding_completed,
+        created_at=user.created_at,
+        last_login=user.last_login,
+        roles=[role.name for role in user.roles] if user.roles else []
+    )
+    
+    print(f"[PROFILE] UserResponse: {user_response.dict()}")
+    
+    return user_response
 
 @router.put("/profile", response_model=UserResponse)
 async def update_user_profile(
     update_data: dict,  # Using dict for flexibility in fields to update
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Update user profile"""
+    # Get the actual User model from database
+    user_id = current_user["id"]
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
     allowed_fields = ["name", "phone", "avatar_url"]
     
     for field, value in update_data.items():
-        if field in allowed_fields and hasattr(current_user, field):
-            setattr(current_user, field, value)
+        if field in allowed_fields and hasattr(user, field):
+            setattr(user, field, value)
     
     db.commit()
-    db.refresh(current_user)
-    return current_user
+    db.refresh(user)
+    return user
 
 @router.get("/notes", response_model=List[NoteResponse])
 async def get_user_notes(
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get all notes for the current user"""
+    user_id = current_user["id"]
     notes = db.query(UserNote).filter(
-        UserNote.user_id == current_user.id
+        UserNote.user_id == user_id
     ).all()
     
     response = []
@@ -64,7 +99,7 @@ async def get_user_notes(
 @router.post("/notes", response_model=NoteResponse)
 async def create_note(
     note_data: NoteBase,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Create a new note"""
@@ -78,9 +113,10 @@ async def create_note(
         raise HTTPException(status_code=404, detail="Lesson not found")
     
     # Check access for students
-    if current_user.has_role("student"):
+    user_id = current_user["id"]
+    if current_user.get("role") == "student":
         has_access = db.query(StudentTeacherAccess).filter(
-            StudentTeacherAccess.student_id == current_user.id,
+            StudentTeacherAccess.student_id == user_id,
             StudentTeacherAccess.teacher_id == course.created_by,
             StudentTeacherAccess.is_active == True
         ).first()
@@ -93,7 +129,7 @@ async def create_note(
     
     # Create new note
     new_note = UserNote(
-        user_id=current_user.id,
+        user_id=user_id,
         course_id=note_data.course_id,
         lesson_id=note_data.lesson_id,
         note_content=note_data.note_content
@@ -119,13 +155,14 @@ async def create_note(
 async def update_note(
     note_id: int,
     note_data: NoteBase,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Update a note"""
+    user_id = current_user["id"]
     note = db.query(UserNote).filter(
         UserNote.id == note_id,
-        UserNote.user_id == current_user.id
+        UserNote.user_id == user_id
     ).first()
     
     if not note:
@@ -155,13 +192,14 @@ async def update_note(
 @router.delete("/notes/{note_id}")
 async def delete_note(
     note_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Delete a note"""
+    user_id = current_user["id"]
     note = db.query(UserNote).filter(
         UserNote.id == note_id,
-        UserNote.user_id == current_user.id
+        UserNote.user_id == user_id
     ).first()
     
     if not note:
@@ -175,7 +213,7 @@ async def delete_note(
 @router.post("/share/course/{course_id}", response_model=ShareCourseResponse)
 async def share_course(
     course_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Generate a shareable link for a course"""
@@ -184,9 +222,10 @@ async def share_course(
         raise HTTPException(status_code=404, detail="Course not found")
     
     # Check access for students
-    if current_user.has_role("student"):
+    user_id = current_user["id"]
+    if current_user.get("role") == "student":
         has_access = db.query(StudentTeacherAccess).filter(
-            StudentTeacherAccess.student_id == current_user.id,
+            StudentTeacherAccess.student_id == user_id,
             StudentTeacherAccess.teacher_id == course.created_by,
             StudentTeacherAccess.is_active == True
         ).first()
@@ -198,6 +237,6 @@ async def share_course(
             )
     
     # Generate a shareable link (in a real app, this might include referral tracking)
-    shareable_link = f"https://regod.app/course/{course_id}?ref=user{current_user.id}"
+    shareable_link = f"https://regod.app/course/{course_id}?ref=user{user_id}"
     
     return ShareCourseResponse(shareable_link=shareable_link)

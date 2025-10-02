@@ -284,3 +284,4 @@ async def update_chapter(
     db.commit()
     db.refresh(chapter)
     return chapter
+

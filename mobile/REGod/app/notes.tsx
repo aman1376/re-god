@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator, Alert, StatusBar } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import ApiService, { type Note } from './services/api';
+import ApiService, { type Note } from '../src/services/api';
 
 export default function NotesScreen() {
   const router = useRouter();
@@ -47,8 +47,10 @@ export default function NotesScreen() {
             try {
               await ApiService.deleteNote(noteId);
               setNotes(notes.filter(note => note.id !== noteId));
+              Alert.alert('Success', 'Note deleted successfully');
             } catch (err) {
               Alert.alert('Error', 'Failed to delete note');
+              console.error('Error deleting note:', err);
             }
           },
         },
@@ -57,9 +59,8 @@ export default function NotesScreen() {
   };
 
   const filteredNotes = notes.filter(note =>
-    note.note_content.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    note.course_title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    note.lesson_title.toLowerCase().includes(searchQuery.toLowerCase())
+    (note.content && note.content.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    (note.title && note.title.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
   const renderNoteItem = ({ item }: { item: Note }) => (
@@ -68,17 +69,18 @@ export default function NotesScreen() {
       onPress={() => handleNotePress(item)}
       onLongPress={() => handleDeleteNote(item.id)}
     >
+      <View style={styles.noteIcon}>
+        <Ionicons name="pencil" size={24} color="#8E8E93" />
+      </View>
       <View style={styles.noteContent}>
-        <Text style={styles.noteDate}>
-          {new Date(item.created_at).toLocaleDateString()}
+        <Text style={styles.noteTitle} numberOfLines={1}>
+          {new Date(item.created_at).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' })} | {item.title || 'Note'}
         </Text>
-        <Text style={styles.noteTitle}>{item.lesson_title}</Text>
-        <Text style={styles.noteCourse}>{item.course_title}</Text>
         <Text style={styles.notePreview} numberOfLines={2}>
-          {item.note_content}
+          {item.content}
         </Text>
       </View>
-      <Ionicons name="chevron-forward" size={24} color="gray" />
+      <Ionicons name="chevron-forward" size={24} color="#C7C7CC" />
     </TouchableOpacity>
   );
 
@@ -108,6 +110,14 @@ export default function NotesScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="dark-content" />
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+          <Ionicons name="arrow-back" size={24} color="#000" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Notes</Text>
+        <View style={{ width: 24 }} />
+      </View>
       <View style={styles.searchContainer}>
         <Ionicons name="search" size={20} color="gray" style={styles.searchIcon} />
         <TextInput 
@@ -134,12 +144,14 @@ export default function NotesScreen() {
         }
       />
 
-      <TouchableOpacity 
-        style={styles.fab}
-        onPress={() => router.push('/new-note' as any)}
-      >
-        <Ionicons name="add" size={32} color="white" />
-      </TouchableOpacity>
+      <View style={styles.fabContainer}>
+        <TouchableOpacity 
+          style={styles.fab}
+          onPress={() => router.push('/new-note' as any)}
+        >
+          <Ionicons name="add" size={32} color="white" />
+        </TouchableOpacity>
+      </View>
     </SafeAreaView>
   );
 }
@@ -147,15 +159,34 @@ export default function NotesScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FBF9F4',
+    backgroundColor: '#f5f2ec', // A slightly off-white color
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#f5f2ec',
+  },
+  backButton: {
+    padding: 4,
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#000',
   },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: 'white',
     borderRadius: 10,
-    margin: 20,
+    marginHorizontal: 16,
+    marginVertical: 8,
     paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: '#EFEFEF',
   },
   searchIcon: {
     marginRight: 10,
@@ -165,49 +196,54 @@ const styles = StyleSheet.create({
     height: 40,
   },
   listContainer: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
+    paddingBottom: 120, // Space for the FAB
   },
   noteItem: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
     backgroundColor: 'white',
     borderRadius: 10,
-    padding: 20,
-    marginBottom: 10,
+    padding: 16,
+    marginBottom: 12,
   },
-  noteDate: {
-    fontSize: 12,
-    color: 'orange',
+  noteIcon: {
+    marginRight: 16,
+  },
+  noteContent: {
+    flex: 1,
   },
   noteTitle: {
     fontSize: 16,
-    fontWeight: 'bold',
-    marginVertical: 4,
+    fontWeight: '600',
+    color: '#000',
+    marginBottom: 4,
   },
   notePreview: {
     fontSize: 14,
     color: 'gray',
   },
-  fab: {
+  fabContainer: {
     position: 'absolute',
-    bottom: 30,
-    right: 30,
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    paddingBottom: 40,
+    backgroundColor: 'transparent',
+  },
+  fab: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
     backgroundColor: 'black',
     justifyContent: 'center',
     alignItems: 'center',
     elevation: 8,
-  },
-  noteContent: {
-    flex: 1,
-  },
-  noteCourse: {
-    fontSize: 12,
-    color: '#6B8E23',
-    marginBottom: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
   },
   loadingContainer: {
     flex: 1,

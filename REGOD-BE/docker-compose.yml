@@ -11,16 +11,19 @@ services:
       - CLERK_API_KEY=sk_test_CSiSTMsbdk780KE3q5ietQu0vzrWqyqcf5QcY2pJR4
       - CLERK_WEBHOOK_SECRET=whsec_0W4nP3ARqYanM0/vrBBEvevqDb/XzPLa
       - CLERK_JWKS_URL=https://divine-urchin-82.clerk.accounts.dev/.well-known/jwks.json
-      - CORS_ORIGINS=${CORS_ORIGINS:-https://3ace01de1504.ngrok-free.app,http://localhost:3000,http://localhost:19006}
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://saint-bennett-attachment-quizzes.trycloudflare.com,http://localhost:3000,http://localhost:19006}
     env_file:
       - .env
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - .:/app
       - /app/regod-env  # Exclude virtual env from volume
     command: uvicorn main:app --host 0.0.0.0 --port 4000 --reload
+    restart: unless-stopped
 
   db:
     image: postgres:15
@@ -37,6 +40,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
 
   redis:
     image: redis:7-alpine

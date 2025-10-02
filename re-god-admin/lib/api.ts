@@ -1,4 +1,4 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://906670ce5cdf.ngrok-free.app/api';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'https://saint-bennett-attachment-quizzes.trycloudflare.com/api';
 
 interface LoginRequest {
   identifier: string;
@@ -98,7 +98,7 @@ class AdminApiService {
     const token = localStorage.getItem('admin_access_token');
     return {
       'Content-Type': 'application/json',
-      'ngrok-skip-browser-warning': 'true',
+      'cloudflare-skip-browser-warning': 'true',
       ...(token && { Authorization: `Bearer ${token}` }),
     };
   }
@@ -107,9 +107,53 @@ class AdminApiService {
     const data = await response.json();
     
     if (!response.ok) {
-      throw new Error(data.error?.message || 'Request failed');
+      const errorMessage = data.error?.message || data.detail || data.message || 'Request failed';
+      throw new Error(errorMessage);
     }
     
+    return data;
+  }
+
+  private static async makeAuthenticatedRequest<T>(
+    url: string,
+    options: RequestInit = {},
+    retryCount = 0
+  ): Promise<T> {
+    const headers = this.getAuthHeaders();
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        ...options.headers,
+        ...headers,
+      },
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      // Handle authentication errors with token refresh
+      if ((response.status === 401 || response.status === 403) && retryCount === 0) {
+        console.log('Admin token expired, attempting refresh...');
+        try {
+          await this.refreshToken();
+          console.log('Admin token refreshed, retrying request...');
+          return this.makeAuthenticatedRequest<T>(url, options, 1);
+        } catch (refreshError) {
+          console.error('Admin token refresh failed:', refreshError);
+          // Clear tokens and redirect to login
+          this.logout();
+          if (typeof window !== 'undefined') {
+            window.location.href = '/login';
+          }
+          throw new Error('Session expired. Please login again.');
+        }
+      }
+
+      // Handle other errors
+      const errorMessage = data.error?.message || data.detail || data.message || `Request failed with status ${response.status}`;
+      throw new Error(errorMessage);
+    }
+
     return data;
   }
 
@@ -119,7 +163,7 @@ class AdminApiService {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': 'true'
+        'cloudflare-skip-browser-warning': 'true'
       },
       body: JSON.stringify(credentials),
     });
@@ -165,12 +209,9 @@ class AdminApiService {
 
   // Admin endpoints
   static async getAdminStats(): Promise<AdminStats> {
-    const response = await fetch(`${API_BASE_URL}/admin/stats`, {
+    return this.makeAuthenticatedRequest<AdminStats>(`${API_BASE_URL}/admin/stats`, {
       method: 'GET',
-      headers: this.getAuthHeaders(),
     });
-    
-    return this.handleResponse(response);
   }
 
   static async getTeachersDirectory(): Promise<Teacher[]> {
@@ -225,11 +266,9 @@ class AdminApiService {
 
   // Courses (admin/teacher)
   static async getCourses(): Promise<AdminCourse[]> {
-    const response = await fetch(`${API_BASE_URL}/courses`, {
+    return this.makeAuthenticatedRequest<AdminCourse[]>(`${API_BASE_URL}/courses`, {
       method: 'GET',
-      headers: this.getAuthHeaders(),
     });
-    return this.handleResponse(response);
   }
 
   static async createCourse(payload: Partial<AdminCourse>): Promise<AdminCourse> {

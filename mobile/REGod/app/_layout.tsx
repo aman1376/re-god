@@ -6,8 +6,8 @@ import { useEffect } from 'react';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/useColorScheme';
-import { AuthProvider } from './contexts/AuthContext';
-import { ClerkProvider } from './providers/ClerkProvider';
+import { AuthProvider } from '../src/contexts/AuthContext';
+import { ClerkProvider } from '../src/providers/ClerkProvider';
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
@@ -39,6 +39,11 @@ export default function RootLayout() {
         >
           <Stack.Screen name="index" />
           <Stack.Screen name="auth" />
+          <Stack.Screen name="teacher-code" />
+          <Stack.Screen name="lesson" />
+          <Stack.Screen name="chat" />
+          <Stack.Screen name="notes" />
+          <Stack.Screen name="new-note" />
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="+not-found" />
         </Stack>

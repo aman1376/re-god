@@ -222,6 +222,35 @@ async def get_student_access(
     
     return response
 
+@router.get("/check-teacher-assignment")
+async def check_teacher_assignment(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Check if the current user has a teacher assigned"""
+    # Check if user has any active teacher assignments
+    access_record = db.query(StudentTeacherAccess).filter(
+        StudentTeacherAccess.student_id == current_user.id,
+        StudentTeacherAccess.is_active == True
+    ).first()
+    
+    if access_record:
+        # Get teacher details
+        teacher = db.query(User).filter(User.id == access_record.teacher_id).first()
+        return {
+            "has_teacher": True,
+            "teacher_id": access_record.teacher_id,
+            "teacher_name": teacher.name if teacher else "Unknown Teacher",
+            "assigned_at": access_record.granted_at
+        }
+    else:
+        return {
+            "has_teacher": False,
+            "teacher_id": None,
+            "teacher_name": None,
+            "assigned_at": None
+        }
+
 @router.delete("/teacher-codes/{code_id}")
 @require_role("teacher")
 async def delete_teacher_code(

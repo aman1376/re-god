@@ -2,6 +2,7 @@ from sqlalchemy import create_engine,text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
+import asyncpg
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -47,3 +48,25 @@ def test_connection():
     except Exception as e:
         print(f"Database connection error: {e}")
         return False
+
+# Async database pool for real-time features
+db_pool = None
+
+async def create_db_pool():
+    """Create async database connection pool"""
+    global db_pool
+    if db_pool is None:
+        # Convert SQLAlchemy URL to asyncpg format
+        db_url = SQLALCHEMY_DATABASE_URL.replace("postgresql://", "postgresql://")
+        db_pool = await asyncpg.create_pool(
+            db_url,
+            min_size=5,
+            max_size=20,
+            command_timeout=60
+        )
+    return db_pool
+
+def get_db_pool():
+    """Get the database pool (synchronous access)"""
+    global db_pool
+    return db_pool

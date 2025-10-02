@@ -1,17 +1,159 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, FlatList, KeyboardAvoidingView, Platform, ActivityIndicator, Alert } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, TextInput, FlatList, KeyboardAvoidingView, Platform, ActivityIndicator, Alert, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import ApiService, { type Message, type ChatResponse } from './services/api';
+import { Ionicons } from '@expo/vector-icons';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import ApiService, { type Message as ApiMessage, type ChatResponse } from '../src/services/api';
+import { useAuth } from '../src/contexts/AuthContext';
+
+// Interface for Message data
+interface Message {
+  id: string;
+  text: string;
+  sender: 'user' | 'assistant';
+  timestamp: string;
+}
 
 export default function ChatScreen() {
+  const router = useRouter();
+  const { name } = useLocalSearchParams<{ name?: string }>();
+  const { user } = useAuth();
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [isConnected, setIsConnected] = useState(false);
+  const [useWebSocket, setUseWebSocket] = useState(true);
+  const [wsRetryCount, setWsRetryCount] = useState(0);
+  const wsRef = useRef<WebSocket | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const maxRetries = 3;
 
   useEffect(() => {
     loadChatHistory();
-  }, []);
+    if (user?.id) {
+      // Try WebSocket first, but don't show errors to user
+      if (useWebSocket) {
+        // Small delay to avoid immediate connection errors
+        const timer = setTimeout(() => {
+          try {
+            connectWebSocket(0); // Start with retry attempt 0
+          } catch (error) {
+            // Silently fall back to polling
+            console.log('[Chat] WebSocket not available, using polling');
+            setUseWebSocket(false);
+          }
+        }, 500);
+        
+        return () => clearTimeout(timer);
+      } else {
+        startPolling();
+      }
+    }
+    
+    return () => {
+      if (wsRef.current) {
+        // Clear any pending retry timer
+        if ((wsRef.current as any).retryTimer) {
+          clearTimeout((wsRef.current as any).retryTimer);
+        }
+        wsRef.current.close();
+      }
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+      }
+    };
+  }, [user?.id, useWebSocket]);
+
+  const connectWebSocket = (retryAttempt: number = 0) => {
+    if (!user?.id) return;
+    
+    try {
+      const ws = ApiService.createWebSocketConnection(user.id);
+      wsRef.current = ws;
+      
+      ws.onopen = () => {
+        console.log('[Chat] WebSocket connected successfully');
+        setIsConnected(true);
+        setWsRetryCount(0); // Reset retry count on successful connection
+      };
+      
+      ws.onmessage = (event) => {
+        console.log('[Chat] WebSocket message received:', event.data);
+        ApiService.handleWebSocketMessage(
+          event.data,
+          (message) => {
+            // Handle new real-time message
+            const newMessage: Message = {
+              id: message.id,
+              text: message.content,
+              sender: message.sender_id === user.id ? 'user' : 'assistant',
+              timestamp: new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            };
+            setMessages(prev => [newMessage, ...prev]);
+          },
+          (error) => {
+            console.warn('[Chat] WebSocket message parsing error:', error);
+          }
+        );
+      };
+      
+      ws.onclose = (event) => {
+        console.log('[Chat] WebSocket disconnected:', event.code, event.reason);
+        setIsConnected(false);
+        
+        // Only attempt to reconnect if it wasn't a clean close and we haven't exceeded retries
+        if (event.code !== 1000 && retryAttempt < maxRetries) {
+          const nextRetry = retryAttempt + 1;
+          console.log(`[Chat] Attempting to reconnect WebSocket... (${nextRetry}/${maxRetries})`);
+          
+          const retryTimer = setTimeout(() => {
+            if (user?.id && useWebSocket) {
+              setWsRetryCount(nextRetry);
+              connectWebSocket(nextRetry);
+            }
+          }, 3000);
+          
+          // Store timer reference for cleanup if needed
+          (wsRef.current as any).retryTimer = retryTimer;
+        } else if (retryAttempt >= maxRetries) {
+          console.log('[Chat] Max WebSocket retries reached, switching to polling');
+          setUseWebSocket(false);
+        }
+      };
+      
+      ws.onerror = (error) => {
+        // Reduce error noise - only log once per connection attempt
+        if (ws.readyState === WebSocket.CONNECTING) {
+          console.warn('[Chat] WebSocket connection failed, using polling instead');
+          setIsConnected(false);
+          
+          // Fall back to polling after WebSocket fails
+          setUseWebSocket(false);
+        }
+      };
+    } catch (error) {
+      console.warn('[Chat] WebSocket not available, using polling:', error);
+      // Fall back to polling
+      setUseWebSocket(false);
+    }
+  };
+
+  const startPolling = () => {
+    console.log('[Chat] Starting polling for real-time updates...');
+    setIsConnected(true);
+    
+    // Poll for new messages every 3 seconds (less aggressive than 2s)
+    pollingRef.current = setInterval(async () => {
+      try {
+        const chatHistory = await ApiService.getChatHistory();
+        setMessages(chatHistory);
+      } catch (error) {
+        console.warn('[Chat] Polling error (will retry):', error);
+        // Don't clear the interval on error, just log and continue
+      }
+    }, 3000);
+  };
 
   const loadChatHistory = async () => {
     try {
@@ -89,11 +231,31 @@ export default function ChatScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['bottom']}>
+    <SafeAreaView style={styles.container} edges={['top']}>
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => router.back()}
+        >
+          <Ionicons name="arrow-back" size={24} color="#333" />
+        </TouchableOpacity>
+        <View style={styles.headerTitleContainer}>
+          <Text style={styles.headerTitle}>{name || 'Chat'}</Text>
+          <View style={styles.connectionStatus}>
+            <View style={[styles.connectionIndicator, { backgroundColor: isConnected ? '#4CAF50' : '#FF9800' }]} />
+            <Text style={styles.connectionText}>
+              {isConnected ? (useWebSocket ? 'Live' : 'Synced') : 'Connecting...'}
+            </Text>
+          </View>
+        </View>
+        <View style={styles.headerSpacer} />
+      </View>
+
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 100 : 0}
       >
         <FlatList
           data={messages}
@@ -112,11 +274,17 @@ export default function ChatScreen() {
             onSubmitEditing={handleSend}
             editable={!loading}
           />
-          {loading && (
-            <View style={styles.loadingIndicator}>
-              <ActivityIndicator size="small" color="#6B8E23" />
-            </View>
-          )}
+          <TouchableOpacity
+            style={[styles.sendButton, (!inputText.trim() || loading) && styles.sendButtonDisabled]}
+            onPress={handleSend}
+            disabled={!inputText.trim() || loading}
+          >
+            {loading ? (
+              <ActivityIndicator size="small" color="white" />
+            ) : (
+              <Ionicons name="send" size={20} color="white" />
+            )}
+          </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -127,6 +295,52 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#FBF9F4',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EEE',
+    backgroundColor: '#FBF9F4',
+  },
+  backButton: {
+    padding: 8,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.1)',
+  },
+  headerTitleContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+    textAlign: 'center',
+    marginRight: 8,
+  },
+  connectionStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  connectionIndicator: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 4,
+  },
+  connectionText: {
+    fontSize: 10,
+    color: '#666',
+    fontWeight: '500',
+  },
+  headerSpacer: {
+    width: 40, // Same width as back button to center the title
   },
   flex: {
     flex: 1,
@@ -174,7 +388,9 @@ const styles = StyleSheet.create({
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 10,
+    paddingHorizontal: 15,
+    paddingVertical: 15,
+    paddingBottom: 25,
     borderTopWidth: 1,
     borderTopColor: '#EEE',
     backgroundColor: 'white',
@@ -185,6 +401,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#F0F0F0',
     borderRadius: 20,
     paddingHorizontal: 15,
+    marginRight: 10,
+  },
+  sendButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#6B8E23',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  sendButtonDisabled: {
+    backgroundColor: '#CCCCCC',
   },
   loadingContainer: {
     flex: 1,

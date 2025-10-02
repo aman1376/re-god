@@ -113,4 +113,77 @@ async def create_s3_presigned_url(
         raise HTTPException(status_code=500, detail=f"S3 presign failed: {str(e)}")
 
 
+@router.post("/uploads/profile-picture", response_model=dict)
+async def upload_profile_picture(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Upload profile picture for any authenticated user"""
+    print(f"[UPLOAD] Starting profile picture upload for user {current_user['id']}")
+    print(f"[UPLOAD] File details: {file.filename}, {file.content_type}, {file.size if hasattr(file, 'size') else 'unknown size'}")
+    
+    # Validate file type
+    if not file.content_type or not file.content_type.startswith('image/'):
+        print(f"[UPLOAD] Invalid file type: {file.content_type}")
+        raise HTTPException(status_code=400, detail="File must be an image")
+    
+    # Validate file size (max 5MB)
+    content = await file.read()
+    print(f"[UPLOAD] File content size: {len(content)} bytes")
+    if len(content) > 5 * 1024 * 1024:  # 5MB
+        print(f"[UPLOAD] File too large: {len(content)} bytes")
+        raise HTTPException(status_code=400, detail="File size must be less than 5MB")
+    
+    try:
+        upload_dir = _ensure_upload_dir()
+        print(f"[UPLOAD] Upload directory: {upload_dir}")
+        
+        # Create profile pictures subdirectory
+        profile_dir = os.path.join(upload_dir, "profile_pictures")
+        os.makedirs(profile_dir, exist_ok=True)
+        print(f"[UPLOAD] Profile directory: {profile_dir}")
+        
+        # Generate unique filename
+        file_extension = os.path.splitext(file.filename)[1] if file.filename else '.jpg'
+        safe_name = f"{current_user['id']}_{uuid.uuid4().hex}{file_extension}"
+        abs_path = os.path.join(profile_dir, safe_name)
+        print(f"[UPLOAD] Saving to: {abs_path}")
+        
+        # Save file
+        with open(abs_path, "wb") as f:
+            f.write(content)
+        print(f"[UPLOAD] File saved successfully")
+        
+        # Generate public URL
+        public_path = f"/uploads/profile_pictures/{safe_name}"
+        print(f"[UPLOAD] Public path: {public_path}")
+        
+        # Update user's avatar_url in database
+        user_id = current_user['id']
+        user = db.query(User).filter(User.id == user_id).first()
+        if user:
+            user.avatar_url = public_path
+            db.commit()
+            db.refresh(user)
+            print(f"[UPLOAD] Database updated successfully")
+        else:
+            print(f"[UPLOAD] Warning: User not found in database")
+        
+        return {
+            "path": public_path,
+            "filename": file.filename,
+            "size": len(content),
+            "content_type": file.content_type,
+            "uploaded_at": datetime.utcnow().isoformat(),
+            "user_id": str(current_user['id']),
+        }
+    except Exception as e:
+        print(f"[UPLOAD] Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Profile picture upload failed: {str(e)}")
+
+
+
 

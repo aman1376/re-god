@@ -26,7 +26,7 @@ export default function TeacherSignupPage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': 'true',
+          'cloudflare-skip-browser-warning': 'true',
         },
         body: JSON.stringify({ name, email, password, teacher_code: teacherCode })
       })
@@ -82,6 +82,7 @@ export default function TeacherSignupPage() {
     </div>
   )
 }
+
 
 
 

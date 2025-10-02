@@ -1,10 +1,39 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, StatusBar} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import ApiService, { type Module } from './services/api';
-import { useAuth } from './contexts/AuthContext';
+import MusicCard from '@/components/MusicCard';
+import SuccessModal from '@/components/SuccessModal';
+import ApiService, { type Module } from '../src/services/api';
+import { useAuth } from '../src/contexts/AuthContext';
+import { getImageUrl } from '../src/config/constants';
+import * as WebBrowser from 'expo-web-browser';
+
+// Types for quiz and reflection functionality
+interface QuizQuestion {
+  id: string;
+  type: 'multiple_choice' | 'reflection' | 'true_false' | 'short_answer';
+  question: string;
+  options?: string[];
+  correctAnswer?: string;
+  required: boolean;
+}
+
+interface QuizResponse {
+  questionId: string;
+  answer: string;
+  type: QuizQuestion['type'];
+}
+
+interface ResponseModalProps {
+  visible: boolean;
+  onClose: () => void;
+  questions: QuizQuestion[];
+  onSubmit: (responses: QuizResponse[]) => void;
+  title: string;
+}
 
 export default function LessonScreen() {
   const { moduleId, courseId } = useLocalSearchParams<{ moduleId: string; courseId?: string }>();
@@ -13,6 +42,184 @@ export default function LessonScreen() {
   const [module, setModule] = useState<Module | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showResponseModal, setShowResponseModal] = useState(false);
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const [responses, setResponses] = useState<QuizResponse[]>([]);
+  const [reflectionText, setReflectionText] = useState('');
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+  const [nextModule, setNextModule] = useState<Module | null>(null);
+
+  // Response Modal Component
+  function ResponseModal({ visible, onClose, questions, onSubmit, title }: ResponseModalProps) {
+    const [currentResponses, setCurrentResponses] = useState<QuizResponse[]>([]);
+    const [currentReflection, setCurrentReflection] = useState('');
+    const currentQuestion = questions[currentQuestionIndex];
+
+    const handleAnswerSelect = (answer: string) => {
+      const newResponse: QuizResponse = {
+        questionId: currentQuestion.id,
+        answer,
+        type: currentQuestion.type
+      };
+
+      setCurrentResponses(prev => {
+        const filtered = prev.filter(r => r.questionId !== currentQuestion.id);
+        return [...filtered, newResponse];
+      });
+    };
+
+    const handleNext = () => {
+      // Save current response before moving to next question
+      if (currentQuestion.type === 'reflection' && currentReflection.trim()) {
+        const newResponse: QuizResponse = {
+          questionId: currentQuestion.id,
+          answer: currentReflection,
+          type: currentQuestion.type
+        };
+        setCurrentResponses(prev => {
+          const filtered = prev.filter(r => r.questionId !== currentQuestion.id);
+          return [...filtered, newResponse];
+        });
+      }
+      
+      if (currentQuestionIndex < questions.length - 1) {
+        setCurrentQuestionIndex(prev => prev + 1);
+        // Clear reflection text for next question
+        setCurrentReflection('');
+      } else {
+        onSubmit(currentResponses);
+      }
+    };
+
+    const handlePrevious = () => {
+      if (currentQuestionIndex > 0) {
+        setCurrentQuestionIndex(prev => prev - 1);
+      }
+    };
+
+    const canProceed = () => {
+      if (!currentQuestion.required) return true;
+      const response = currentResponses.find(r => r.questionId === currentQuestion.id);
+      
+      // For reflection questions, check if there's text in the reflection input
+      if (currentQuestion.type === 'reflection') {
+        return currentReflection.trim().length > 0;
+      }
+      
+      // For other question types, check if there's a response
+      return response && response.answer.trim().length > 0;
+    };
+
+    if (!currentQuestion) return null;
+
+    return (
+      <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+        <SafeAreaView style={responseModalStyles.container}>
+          <View style={responseModalStyles.header}>
+            <Text style={responseModalStyles.headerTitle}>{title}</Text>
+            <TouchableOpacity onPress={onClose} style={responseModalStyles.closeButton}>
+              <Ionicons name="close" size={24} color="black" />
+            </TouchableOpacity>
+          </View>
+
+          <View style={responseModalStyles.progressContainer}>
+            <Text style={responseModalStyles.progressText}>
+              {currentQuestionIndex + 1} of {questions.length}
+            </Text>
+            <View style={responseModalStyles.progressBar}>
+              <View style={[responseModalStyles.progressFill, { width: `${((currentQuestionIndex + 1) / questions.length) * 100}%` }]} />
+            </View>
+          </View>
+
+          <ScrollView style={responseModalStyles.content}>
+            <View style={responseModalStyles.questionContainer}>
+              <Text style={responseModalStyles.questionTitle}>{currentQuestion.question}</Text>
+
+              {currentQuestion.type === 'reflection' && (
+                <TextInput
+                  style={responseModalStyles.reflectionInput}
+                  multiline
+                  placeholder="Write your reflection here..."
+                  value={currentReflection || currentResponses.find(r => r.questionId === currentQuestion.id)?.answer || ''}
+                  onChangeText={setCurrentReflection}
+                  textAlignVertical="top"
+                />
+              )}
+
+              {currentQuestion.type === 'multiple_choice' && currentQuestion.options && (
+                <View style={responseModalStyles.optionsContainer}>
+                  {currentQuestion.options.map((option, index) => (
+                    <TouchableOpacity
+                      key={index}
+                      style={[
+                        responseModalStyles.option,
+                        currentResponses.find(r => r.questionId === currentQuestion.id)?.answer === option &&
+                        responseModalStyles.selectedOption
+                      ]}
+                      onPress={() => handleAnswerSelect(option)}
+                    >
+                      <Text style={responseModalStyles.optionText}>{option}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+
+              {currentQuestion.type === 'true_false' && (
+                <View style={responseModalStyles.optionsContainer}>
+                  {['True', 'False'].map((option) => (
+                    <TouchableOpacity
+                      key={option}
+                      style={[
+                        responseModalStyles.option,
+                        currentResponses.find(r => r.questionId === currentQuestion.id)?.answer === option &&
+                        responseModalStyles.selectedOption
+                      ]}
+                      onPress={() => handleAnswerSelect(option)}
+                    >
+                      <Text style={responseModalStyles.optionText}>{option}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+
+              {currentQuestion.type === 'short_answer' && (
+                <TextInput
+                  style={responseModalStyles.shortAnswerInput}
+                  placeholder="Enter your answer..."
+                  value={currentResponses.find(r => r.questionId === currentQuestion.id)?.answer || ''}
+                  onChangeText={(text) => handleAnswerSelect(text)}
+                />
+              )}
+            </View>
+          </ScrollView>
+
+          <View style={responseModalStyles.footer}>
+            <TouchableOpacity
+              style={[responseModalStyles.navButton, responseModalStyles.previousButton]}
+              onPress={handlePrevious}
+              disabled={currentQuestionIndex === 0}
+            >
+              <Text style={responseModalStyles.previousButtonText}>Previous</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                responseModalStyles.navButton,
+                responseModalStyles.nextButton,
+                !canProceed() && responseModalStyles.disabledButton
+              ]}
+              onPress={handleNext}
+              disabled={!canProceed()}
+            >
+              <Text style={responseModalStyles.nextButtonText}>
+                {currentQuestionIndex === questions.length - 1 ? 'Submit' : 'Next'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </Modal>
+    );
+  }
 
   useEffect(() => {
     if (moduleId && isAuthenticated && !authLoading) {
@@ -26,16 +233,22 @@ export default function LessonScreen() {
       if (!courseId) {
         throw new Error('Course ID is required');
       }
-      
+
       // Get all modules for the course and find the specific one
       const modules = await ApiService.getCourseModules(Number(courseId));
       const foundModule = modules.find(m => m.id === Number(moduleId));
-      
+
       if (!foundModule) {
         throw new Error('Lesson not found');
       }
-      
+
+      // Find the next module in the sequence
+      const sortedModules = modules.sort((a, b) => a.order - b.order);
+      const currentIndex = sortedModules.findIndex(m => m.id === Number(moduleId));
+      const nextModule = currentIndex < sortedModules.length - 1 ? sortedModules[currentIndex + 1] : null;
+
       setModule(foundModule);
+      setNextModule(nextModule);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load lesson');
       console.error('Error loading lesson:', err);
@@ -44,14 +257,85 @@ export default function LessonScreen() {
     }
   };
 
-  const handleResponsePress = () => {
-    // TODO: Implement response functionality
-    Alert.alert('Response', 'Response functionality will be implemented soon');
+  const handleQuizPress = () => {
+    if (!module?.quiz) {
+      Alert.alert('No Quiz Available', 'This lesson does not have a quiz.');
+      return;
+    }
+
+    // Parse the quiz data to create quiz questions
+    const questions = parseQuizData(module.quiz);
+    if (questions.length === 0) {
+      Alert.alert('Quiz Error', 'Unable to load quiz questions.');
+      return;
+    }
+
+    setShowResponseModal(true);
+    setCurrentQuestionIndex(0);
+    setResponses([]);
+  };
+
+  const parseQuizData = (quizData: any): QuizQuestion[] => {
+    if (!quizData || !quizData.questions) {
+      return [];
+    }
+
+    return quizData.questions.map((q: any, index: number) => {
+      let type: QuizQuestion['type'] = 'multiple_choice';
+      
+      if (q.type === 'true_false') {
+        type = 'true_false';
+      } else if (q.type === 'short_answer' || q.type === 'text') {
+        type = 'short_answer';
+      } else if (q.type === 'reflection') {
+        type = 'reflection';
+      }
+
+      return {
+        id: `q${q.id || index + 1}`,
+        type,
+        question: q.question,
+        options: q.options || undefined,
+        correctAnswer: q.correct_answer?.toString(),
+        required: true
+      };
+    });
+  };
+
+  const handleResponseSubmit = async (submittedResponses: QuizResponse[]) => {
+    try {
+      setShowResponseModal(false);
+
+      // Save quiz responses to backend
+      if (module && courseId) {
+        // Mark lesson as completed with quiz responses
+        await ApiService.completeLesson(
+          parseInt(courseId),
+          parseInt(moduleId),
+          submittedResponses
+        );
+
+        // Update course progress - let backend calculate the correct percentage
+        // based on total modules in the course
+        await ApiService.updateCourseProgress(
+          parseInt(courseId),
+          null, // Let backend calculate progress percentage
+          parseInt(moduleId),
+          'completed'
+        );
+      }
+
+      // Show success modal instead of alert
+      setShowSuccessModal(true);
+    } catch (error) {
+      console.error('Error submitting quiz responses:', error);
+      Alert.alert('Error', 'Failed to submit quiz responses. Please try again.');
+    }
   };
 
   const handleActionPress = (action: string) => {
     if (!module) return;
-    
+
     let content = '';
     switch (action) {
       case 'further_study':
@@ -67,75 +351,178 @@ export default function LessonScreen() {
         content = module.artwork || 'No artwork available';
         break;
     }
-    
+
     Alert.alert(action.replace('_', ' ').toUpperCase(), content);
+  };
+
+  const handleSuccessContinue = () => {
+    setShowSuccessModal(false);
+
+    if (nextModule && courseId) {
+      // Navigate to next module
+      router.push(`/lesson?moduleId=${nextModule.id}&courseId=${courseId}`);
+    } else {
+      // No next module, go back to course screen
+      router.replace('/(tabs)/course');
+    }
+  };
+
+  // Helper function to convert relative URLs to full URLs
+  const getImageUrlWithFallback = (imageUrl: string | null): any => {
+    if (!imageUrl) return null;
+    const fullUrl = getImageUrl(imageUrl);
+    console.log('Generated image URL:', fullUrl);
+    return fullUrl ? { uri: fullUrl } : null;
   };
 
   if (authLoading || loading) {
     return (
-      <SafeAreaView style={styles.container}>
+      <View style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+
+        {/* Custom Header */}
+        <View style={styles.header}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <Ionicons name="arrow-back" size={24} color="#333" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Course</Text>
+          <View style={styles.headerSpacer} />
+        </View>
+
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#6B8E23" />
           <Text style={styles.loadingText}>
             {authLoading ? 'Authenticating...' : 'Loading lesson...'}
           </Text>
         </View>
-      </SafeAreaView>
+      </View>
     );
   }
 
   if (!isAuthenticated) {
     return (
-      <SafeAreaView style={styles.container}>
+      <View style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+
+        {/* Custom Header */}
+        <View style={styles.header}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <Ionicons name="arrow-back" size={24} color="#333" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Course</Text>
+          <View style={styles.headerSpacer} />
+        </View>
+
         <View style={styles.loadingContainer}>
           <Text style={styles.loadingText}>Please log in to view lessons</Text>
         </View>
-      </SafeAreaView>
+      </View>
     );
   }
 
   if (error) {
     return (
-      <SafeAreaView style={styles.container}>
+      <View style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+
+        {/* Custom Header */}
+        <View style={styles.header}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <Ionicons name="arrow-back" size={24} color="#333" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Course</Text>
+          <View style={styles.headerSpacer} />
+        </View>
+
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>Error: {error}</Text>
           <TouchableOpacity style={styles.retryButton} onPress={loadModule}>
             <Text style={styles.retryButtonText}>Retry</Text>
           </TouchableOpacity>
         </View>
-      </SafeAreaView>
+      </View>
     );
   }
 
   if (!module) {
     return (
-      <SafeAreaView style={styles.container}>
+      <View style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+
+        {/* Custom Header */}
+        <View style={styles.header}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <Ionicons name="arrow-back" size={24} color="#333" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Course</Text>
+          <View style={styles.headerSpacer} />
+        </View>
+
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>Lesson not found</Text>
         </View>
-      </SafeAreaView>
+      </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView>
+    <View style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+
+      {/* Custom Header */}
+      <View style={styles.header}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => {
+            if (router.canGoBack()) {
+              router.back();
+            } else {
+              // Fallback to course screen if no previous screen
+              router.replace('/(tabs)/course');
+            }
+          }}
+        >
+          <Ionicons name="arrow-back" size={24} color="#333" />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Course</Text>
+        <View style={styles.headerSpacer} />
+      </View>
+
+      <ScrollView style={styles.scrollView}>
         {/* Header Image */}
         {module.header_image_url ? (
-          <Image 
-            source={{ uri: module.header_image_url }}
-            style={styles.headerImage}
-          />
+          <View style={styles.headerImageContainer}>
+            <Image
+              source={getImageUrlWithFallback(module.header_image_url)}
+              style={styles.headerImage}
+              resizeMode="cover"
+            />
+            <LinearGradient
+              colors={['transparent', 'rgba(0,0,0,0.7)']}
+              style={styles.imageOverlay}
+            />
+            <Text style={styles.imageTitle}>{module.title}</Text>
+          </View>
         ) : (
           <View style={styles.headerPlaceholder}>
             <Ionicons name="image-outline" size={64} color="gray" />
             <Text style={styles.placeholderText}>No image available</Text>
           </View>
         )}
-        
+
         <View style={styles.contentContainer}>
-          {/* Title */}
-          <Text style={styles.title}>{module.title}</Text>
 
           {/* Content */}
           {module.content && (
@@ -149,10 +536,12 @@ export default function LessonScreen() {
           {module.key_verses && (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Key verses</Text>
-              <Text style={styles.contentText}>{module.key_verses}</Text>
-              {module.key_verses_ref && (
-                <Text style={styles.referenceText}>Reference: {module.key_verses_ref}</Text>
-              )}
+              <View style={styles.keyVersesCard}>
+                <Text style={styles.keyVersesText}>{module.key_verses}</Text>
+                {module.key_verses_ref && (
+                  <Text style={styles.keyVersesReference}>Reference: {module.key_verses_ref}</Text>
+                )}
+              </View>
             </View>
           )}
 
@@ -167,14 +556,13 @@ export default function LessonScreen() {
             </View>
           )}
 
-          {/* Response Unlock */}
-          {module.response_prompt && (
+          {/* Quiz Section */}
+          {module.quiz && (
             <View style={styles.unlockSection}>
               <Ionicons name="lock-closed" size={32} color="gray" />
-              <Text style={styles.unlockText}>Respond to unlock the next lesson</Text>
-              <Text style={styles.promptText}>{module.response_prompt}</Text>
-              <TouchableOpacity style={styles.responseButton} onPress={handleResponsePress}>
-                <Text style={styles.responseButtonText}>Response</Text>
+              <Text style={styles.unlockText}>Complete the quiz to unlock the next lesson</Text>
+              <TouchableOpacity style={styles.responseButton} onPress={handleQuizPress}>
+                <Text style={styles.responseButtonText}>Start Quiz</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -183,33 +571,34 @@ export default function LessonScreen() {
           {module.music_selection && (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Music selection</Text>
-              <View style={styles.musicCard}>
-                <Ionicons name="musical-notes" size={24} color="#6B8E23" />
-                <View style={styles.musicContent}>
-                  <Text style={styles.musicTitle}>{module.music_selection}</Text>
-                  {module.media_url && (
-                    <TouchableOpacity style={styles.playButton}>
-                      <Ionicons name="play" size={16} color="white" />
-                      <Text style={styles.playButtonText}>Play</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              </View>
+              <MusicCard
+                title={module.music_selection}
+                mediaUrl={module.media_url}
+                onPlay={() => {
+                  // Handle play functionality
+                  // console.log('Playing music:', module.media_url);
+                  if (module?.media_url) {
+                    WebBrowser.openBrowserAsync(module.media_url).catch((error) => {
+                      console.error('Failed to open browser:', error);
+                    });
+                  }
+                }}
+              />
             </View>
           )}
 
           {/* Action Buttons */}
           <View style={styles.actionButtons}>
             {module.further_study && (
-              <TouchableOpacity 
-                style={styles.actionButton} 
+              <TouchableOpacity
+                style={styles.actionButton}
                 onPress={() => handleActionPress('further_study')}
               >
                 <Text style={styles.actionButtonText}>Further study</Text>
               </TouchableOpacity>
             )}
             {module.personal_experiences && (
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.actionButton}
                 onPress={() => handleActionPress('personal_experiences')}
               >
@@ -217,7 +606,7 @@ export default function LessonScreen() {
               </TouchableOpacity>
             )}
             {module.resources && (
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.actionButton}
                 onPress={() => handleActionPress('resources')}
               >
@@ -225,7 +614,7 @@ export default function LessonScreen() {
               </TouchableOpacity>
             )}
             {module.artwork && (
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.actionButton}
                 onPress={() => handleActionPress('artwork')}
               >
@@ -235,14 +624,93 @@ export default function LessonScreen() {
           </View>
         </View>
       </ScrollView>
-    </SafeAreaView>
+
+      {/* Quiz Modal */}
+      {module?.quiz && (
+        <ResponseModal
+          visible={showResponseModal}
+          onClose={() => setShowResponseModal(false)}
+          questions={parseQuizData(module.quiz)}
+          title="Lesson Quiz"
+          onSubmit={handleResponseSubmit}
+        />
+      )}
+
+      {/* Success Modal */}
+      <SuccessModal
+        visible={showSuccessModal}
+        onContinue={handleSuccessContinue}
+        title="Nice work!"
+        subtitle={nextModule ? "You've unlocked the next lesson!" : "You've completed this lesson!"}
+        buttonText="Continue"
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FBF9F4',
+    backgroundColor: '#f5f2ec',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: 50, // Account for status bar
+    paddingBottom: 15,
+    backgroundColor: '#f5f2ec', // Light translucent background
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 1000,
+  },
+  headerImageContainer: {
+    position: 'relative',
+    width: '100%',
+    height: 250,
+  },
+  headerImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 0,
+  },
+  imageOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: '50%', // fade only bottom half
+  },
+  imageTitle: {
+    position: 'absolute',
+    bottom: 20,
+    left: 20,
+    right: 20,
+    color: '#fff',
+    fontSize: 24,
+    fontWeight: 'bold',
+  },
+
+  backButton: {
+    padding: 8,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.1)',
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+    textAlign: 'center',
+  },
+  headerSpacer: {
+    width: 40, // Same width as back button to center the title
+  },
+  scrollView: {
+    flex: 1,
+    paddingTop: 100, // Account for header height
   },
   loadingContainer: {
     flex: 1,
@@ -277,10 +745,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  headerImage: {
-    width: '100%',
-    height: 250,
-  },
+
   headerPlaceholder: {
     width: '100%',
     height: 250,
@@ -300,6 +765,7 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: 'bold',
     marginBottom: 20,
+    color: '#ffffff',
   },
   section: {
     marginBottom: 20,
@@ -308,6 +774,7 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: 'bold',
     marginBottom: 10,
+    color: '#56621c',
   },
   contentText: {
     fontSize: 16,
@@ -350,38 +817,29 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
-  musicCard: {
-    backgroundColor: 'white',
-    borderRadius: 10,
-    padding: 15,
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
+  keyVersesCard: {
+    backgroundColor: '#56621c',
+    borderRadius: 5,
+    padding: 20,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
-  musicContent: {
-    flex: 1,
-    marginLeft: 10,
-  },
-  musicTitle: {
+  keyVersesText: {
     fontSize: 16,
-    fontWeight: '500',
-    color: '#333',
-  },
-  playButton: {
-    backgroundColor: '#6B8E23',
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 15,
-    marginTop: 8,
-    alignSelf: 'flex-start',
-  },
-  playButtonText: {
+    lineHeight: 24,
     color: 'white',
-    fontSize: 12,
-    marginLeft: 4,
+    marginBottom: 8,
+  },
+  keyVersesReference: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontStyle: 'italic',
   },
   actionButtons: {
     marginTop: 20,
@@ -398,5 +856,136 @@ const styles = StyleSheet.create({
   actionButtonText: {
     fontSize: 16,
     fontWeight: '500',
+  },
+});
+
+// Response Modal Styles
+const responseModalStyles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: 'white',
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  closeButton: {
+    padding: 5,
+  },
+  progressContainer: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+  },
+  progressText: {
+    fontSize: 12,
+    color: '#666',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  progressBar: {
+    height: 4,
+    backgroundColor: '#E0E0E0',
+    borderRadius: 2,
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#6B8E23',
+    borderRadius: 2,
+  },
+  content: {
+    flex: 1,
+    padding: 20,
+  },
+  questionContainer: {
+    flex: 1,
+  },
+  questionTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 24,
+    lineHeight: 28,
+  },
+  reflectionInput: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 12,
+    padding: 16,
+    fontSize: 16,
+    minHeight: 120,
+    textAlignVertical: 'top',
+  },
+  shortAnswerInput: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+  },
+  optionsContainer: {
+    gap: 12,
+  },
+  option: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    padding: 16,
+    backgroundColor: 'white',
+  },
+  selectedOption: {
+    borderColor: '#6B8E23',
+    backgroundColor: '#F0F8F0',
+  },
+  optionText: {
+    fontSize: 16,
+    color: '#333',
+  },
+  footer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+    backgroundColor: 'white',
+  },
+  navButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  previousButton: {
+    backgroundColor: 'white',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    marginRight: 10,
+  },
+  nextButton: {
+    backgroundColor: '#6B8E23',
+    marginLeft: 10,
+  },
+  disabledButton: {
+    backgroundColor: '#CCC',
+  },
+  previousButtonText: {
+    color: '#666',
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  nextButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });

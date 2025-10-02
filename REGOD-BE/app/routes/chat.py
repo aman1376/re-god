@@ -2,13 +2,16 @@ from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSoc
 from sqlalchemy.orm import Session
 from typing import List
 import json
+import uuid
 from datetime import datetime
 
-from app.database import get_db
+from app.database import get_db, get_db_pool
 from app.models import User, ChatThread, ChatMessage, StudentTeacherAccess
 from app.schemas import ThreadResponse, MessageResponse, MessageBase
 from app.utils.auth import get_current_user
 from app.rbac import require_permission
+from app.realtime import manager
+from app.queue_service import pgmq_service
 
 router = APIRouter()
 
@@ -163,20 +166,44 @@ async def send_message(
     db.commit()
     db.refresh(new_message)
     
-    # Notify teacher if connected via WebSocket
-    if thread.assigned_teacher_id and thread.assigned_teacher_id in active_connections:
-        teacher_ws = active_connections[thread.assigned_teacher_id]
-        await teacher_ws.send_text(json.dumps({
-            "type": "new_message",
-            "thread_id": thread.id,
-            "message": {
-                "id": new_message.id,
-                "content": new_message.content,
-                "sender_id": new_message.sender_id,
-                "sender_name": current_user.name,
-                "timestamp": new_message.timestamp.isoformat()
+    # Send PostgreSQL notification for real-time updates
+    try:
+        db_pool = get_db_pool()
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                "NOTIFY chat_message_notification, %s",
+                json.dumps({
+                    'thread_id': thread.id,
+                    'message': {
+                        'id': str(new_message.id),
+                        'content': new_message.content,
+                        'sender_id': str(new_message.sender_id),
+                        'sender_name': current_user.name,
+                        'timestamp': new_message.timestamp.isoformat(),
+                        'message_type': new_message.message_type
+                    },
+                    'sender_id': str(current_user.id)
+                })
+            )
+    except Exception as e:
+        print(f"Error sending PostgreSQL notification: {e}")
+    
+    # Send to PGMQ for reliable delivery and notifications
+    try:
+        await pgmq_service.send_chat_notification(
+            str(thread.assigned_teacher_id) if thread.assigned_teacher_id else str(current_user.id),
+            {
+                'id': str(new_message.id),
+                'content': new_message.content,
+                'sender_id': str(new_message.sender_id),
+                'sender_name': current_user.name,
+                'timestamp': new_message.timestamp.isoformat(),
+                'thread_id': thread.id,
+                'message_type': new_message.message_type
             }
-        }))
+        )
+    except Exception as e:
+        print(f"Error sending PGMQ notification: {e}")
     
     return MessageResponse(
         id=new_message.id,

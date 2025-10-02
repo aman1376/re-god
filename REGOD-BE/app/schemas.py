@@ -4,9 +4,10 @@ from datetime import datetime
 
 # Auth Schemas
 class UserBase(BaseModel):
-    email: EmailStr
+    email: Optional[str] = None
     name: str
     phone: Optional[str] = None
+    avatar_url: Optional[str] = None
 
 class UserCreate(UserBase):
     password: str
@@ -16,7 +17,7 @@ class UserLogin(BaseModel):
     password: str
 
 class UserResponse(UserBase):
-    id: int
+    id: str
     is_verified: bool
     onboarding_completed: bool
     created_at: datetime
@@ -203,7 +204,7 @@ class ModuleResponse(ModuleBase):
 class UserCourseProgressBase(BaseModel):
     course_id: int
     last_visited_module_id: Optional[int] = None
-    progress_percentage: float
+    progress_percentage: Optional[float] = None
 
 class UserCourseProgressResponse(UserCourseProgressBase):
     id: int
@@ -270,21 +271,46 @@ class ThreadResponse(BaseModel):
 
 # Profile Schemas
 class NoteBase(BaseModel):
-    course_id: int
-    lesson_id: int
-    note_content: str
+    title: Optional[str] = None
+    content: str
 
 class NoteResponse(NoteBase):
     id: int
-    user_id: int
+    user_id: str
     created_at: datetime
     updated_at: datetime
-    course_title: str
-    lesson_title: str
     
     class Config:
         from_attributes = True
 
 class ShareCourseResponse(BaseModel):
     shareable_link: str
-    message: str = "Course shared successfully."
+
+# Favorites Schemas
+class FavoriteResponse(BaseModel):
+    id: int
+    user_id: str
+    lesson_id: int
+    created_at: datetime
+    lesson_title: str
+    course_title: str
+    thumbnail_url: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+class ChapterFavoriteResponse(BaseModel):
+    id: int
+    user_id: str
+    chapter_id: int
+    course_id: int
+    created_at: datetime
+    chapter_title: str
+    course_title: str
+    cover_image_url: Optional[str] = None
+    progress_percentage: float
+    completed_modules: int
+    total_modules: int
+    
+    class Config:
+        from_attributes = True

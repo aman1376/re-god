@@ -1,6 +1,6 @@
 from sqlalchemy import (
     Boolean, Column, ForeignKey, String, DateTime,
-    Float, Text, Table, Integer
+    Float, Text, Table, Integer, UniqueConstraint
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -43,7 +43,7 @@ class User(Base):
     name = Column(String, nullable=False)
     phone = Column(String, nullable=True)
     avatar_url = Column(String, nullable=True)
-    clerk_user_id = Column(String, nullable=True)
+    clerk_user_id = Column(String, nullable=True, unique=True, index=True)
     is_active = Column(Boolean, default=True)
     is_verified = Column(Boolean, default=False)
     onboarding_completed = Column(Boolean, default=False)
@@ -53,6 +53,7 @@ class User(Base):
     # Relationships
     courses = relationship("UserCourseProgress", back_populates="user")
     favorites = relationship("UserFavorite", back_populates="user")
+    chapter_favorites = relationship("UserChapterFavorite", back_populates="user")
     notes = relationship("UserNote", back_populates="user")
     chat_threads = relationship("ChatThread", back_populates="user", foreign_keys="ChatThread.user_id")
     teacher_assignments = relationship("TeacherAssignment", back_populates="teacher", foreign_keys="TeacherAssignment.teacher_id")
@@ -303,18 +304,6 @@ class UserModuleProgress(Base):
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
 
-class UserFavorite(Base):
-    __tablename__ = "user_favorites"
-
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    lesson_id = Column(Integer, ForeignKey("modules.id"))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    user = relationship("User", back_populates="favorites")
-    lesson = relationship("Module")
-
-
 class UserNote(Base):
     __tablename__ = "user_notes"
 
@@ -359,3 +348,37 @@ class ChatMessage(Base):
 
     thread = relationship("ChatThread", back_populates="messages")
     sender = relationship("User")
+
+
+# User Favorites for Lessons
+class UserFavorite(Base):
+    __tablename__ = "user_favorites"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    lesson_id = Column(Integer, ForeignKey("modules.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", back_populates="favorites")
+    lesson = relationship("Module")
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'lesson_id', name='unique_user_lesson_favorite'),
+    )
+
+
+# User Favorites for Chapters
+class UserChapterFavorite(Base):
+    __tablename__ = "user_chapter_favorites"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    chapter_id = Column(Integer, ForeignKey("chapters.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("User", back_populates="chapter_favorites")
+    chapter = relationship("Chapter")
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'chapter_id', name='unique_user_chapter_favorite'),
+    )

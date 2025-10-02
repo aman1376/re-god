@@ -20,6 +20,8 @@ export default function TabsLayout() {
         tabBarStyle: Platform.select({
           ios: {
             position: 'absolute',
+            justifyContent: 'center',
+            alignItems: 'center',
           },
           default: {},
         }),
@@ -52,7 +54,6 @@ export default function TabsLayout() {
           tabBarIcon: ({ color }) => <IconSymbol size={28} name="person.fill" color={color} />,
         }}
       />
-      <Tabs.Screen name="lesson" options={{ href: null, title: 'Lesson' }} />
       <Tabs.Screen name="chat" options={{ href: null, title: 'Chat' }} />
       <Tabs.Screen name="notes" options={{ href: null, title: 'Notes' }} />
       <Tabs.Screen name="new-note" options={{ href: null, title: 'New Note' }} />
