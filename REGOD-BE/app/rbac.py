@@ -4,7 +4,7 @@ from functools import wraps
 from typing import List, Callable, Any
 from app.database import get_db
 from app.models import User, Role, Permission
-from app.utils.auth import get_current_user  # Local JWT-based auth
+from app.utils.auth import get_current_user, user_has_permission, user_has_role  # Local JWT-based auth
 
 # =========================
 # Permission constants
@@ -72,7 +72,7 @@ def require_permission(permission_name: str):
         @wraps(func)
         async def wrapper(
             *args, 
-            current_user: User = Depends(get_current_user),
+            current_user: dict = Depends(get_current_user),
             db: Session = Depends(get_db),
             **kwargs: Any
         ):
@@ -82,7 +82,7 @@ def require_permission(permission_name: str):
                     detail="Authentication required"
                 )
 
-            if not current_user.has_permission(permission_name):
+            if not user_has_permission(current_user, permission_name):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail=f"Permission '{permission_name}' required"
@@ -101,7 +101,7 @@ def require_role(role_name: Union[str, list[str]]):
         @wraps(func)
         async def wrapper(
             *args,
-            current_user: User = Depends(get_current_user),
+            current_user: dict = Depends(get_current_user),
             db: Session = Depends(get_db),
             **kwargs: Any
         ):
@@ -110,8 +110,9 @@ def require_role(role_name: Union[str, list[str]]):
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Authentication required"
                 )
+            
             roles_to_check = role_name if isinstance(role_name, list) else [role_name]
-            if not any(current_user.has_role(r) for r in roles_to_check):
+            if not any(user_has_role(current_user, r) for r in roles_to_check):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail=f"Role '{roles_to_check}' required"

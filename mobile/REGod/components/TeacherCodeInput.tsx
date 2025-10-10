@@ -9,189 +9,286 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  TouchableWithoutFeedback,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import ApiService from '../src/services/api';
 
 interface TeacherCodeInputProps {
+  userEmail: string;
   onSuccess: () => void;
   onCancel: () => void;
-  userEmail: string;
 }
 
-export default function TeacherCodeInput({ onSuccess, onCancel, userEmail }: TeacherCodeInputProps) {
+export default function TeacherCodeInput({ userEmail, onSuccess, onCancel }: TeacherCodeInputProps) {
   const [teacherCode, setTeacherCode] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSubmit = async () => {
     if (!teacherCode.trim()) {
-      Alert.alert('Teacher Code Required', 'Please enter a teacher code to continue');
+      Alert.alert('Error', 'Please enter a teacher code');
       return;
     }
 
+    setIsSubmitting(true);
+
     try {
-      setLoading(true);
-      const result = await ApiService.useTeacherCode(teacherCode.trim());
+      // Get user ID from AsyncStorage (stored during clerkExchange)
+      const userDataString = await ApiService.getStoredUserData();
+      console.log('TeacherCodeInput: Retrieved user data string:', userDataString);
       
-      if (result.success) {
+      if (!userDataString) {
+        Alert.alert('Error', 'User data not found. Please try signing in again.');
+        setIsSubmitting(false);
+        return;
+      }
+
+      const userData = JSON.parse(userDataString);
+      console.log('TeacherCodeInput: Parsed user data:', userData);
+      
+      // Submit teacher code using the correct student endpoint
+      const response = await fetch(`${await ApiService.base()}/use-teacher-code`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${await ApiService.getStoredToken()}`
+        },
+        body: JSON.stringify({
+          code: teacherCode.trim().toUpperCase(),
+          user_data: userData  // Include user data in case token is not valid
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
         Alert.alert(
           'Success!',
-          `You have been assigned to ${result.teacher_name || 'your teacher'}. You can now access the app.`,
-          [{ text: 'Continue', onPress: onSuccess }]
+          data.message || 'Teacher code accepted! You now have access to your teacher\'s courses.',
+          [
+            {
+              text: 'Continue',
+              onPress: () => {
+                // Re-run clerk exchange to get new tokens
+                handleTokenRefresh();
+              }
+            }
+          ]
         );
       } else {
-        Alert.alert('Invalid Code', result.message);
+        const errorData = await response.json();
+        Alert.alert('Error', errorData.detail || 'Invalid teacher code. Please check and try again.');
       }
     } catch (error) {
-      console.error('Error using teacher code:', error);
-      Alert.alert('Error', 'Failed to verify teacher code. Please try again.');
+      console.error('Teacher code submission error:', error);
+      Alert.alert('Error', 'An error occurred. Please try again.');
     } finally {
-      setLoading(false);
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleTokenRefresh = async () => {
+    try {
+      // Re-run clerk exchange to get new JWT tokens
+      await ApiService.clerkExchange(userEmail);
+      onSuccess();
+    } catch (error) {
+      console.error('Token refresh error:', error);
+      Alert.alert('Error', 'Failed to refresh authentication. Please try signing in again.');
     }
   };
 
   return (
-    <KeyboardAvoidingView 
-      style={styles.container} 
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <View style={styles.content}>
+    <View style={styles.container}>
+      <TouchableWithoutFeedback onPress={onCancel}>
+        <View style={styles.backdrop} />
+      </TouchableWithoutFeedback>
+      <KeyboardAvoidingView 
+        style={styles.keyboardContainer} 
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <TouchableWithoutFeedback>
+          <View style={styles.content}>
         <View style={styles.header}>
-          <Ionicons name="school" size={60} color="#6B8E23" />
-          <Text style={styles.title}>Teacher Assignment Required</Text>
-          <Text style={styles.subtitle}>
-            Welcome {userEmail}! To access the app, you need to be assigned to a teacher.
-          </Text>
+          <Text style={styles.title}>Teacher Access Required</Text>
+          <Text style={styles.subtitle}>You're signed in as:</Text>
+          <Text style={styles.email}>{userEmail}</Text>
         </View>
 
-        <View style={styles.inputContainer}>
+        <View style={styles.form}>
           <Text style={styles.label}>Teacher Code</Text>
           <TextInput
             style={styles.input}
             value={teacherCode}
-            onChangeText={setTeacherCode}
-            placeholder="Enter your teacher's code"
+            onChangeText={(text) => setTeacherCode(text.toUpperCase())}
+            placeholder="Enter your teacher code"
             placeholderTextColor="#999"
             autoCapitalize="characters"
             autoCorrect={false}
-            editable={!loading}
+            editable={!isSubmitting}
           />
-          <Text style={styles.helpText}>
-            Ask your teacher for the code to get started
-          </Text>
-        </View>
 
-        <View style={styles.buttonContainer}>
           <TouchableOpacity
-            style={[styles.button, styles.cancelButton]}
+            style={[styles.submitButton, isSubmitting && styles.submitButtonDisabled]}
+            onPress={handleSubmit}
+            disabled={isSubmitting || !teacherCode.trim()}
+          >
+            {isSubmitting ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.submitButtonText}>Submit Teacher Code</Text>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.cancelButton}
             onPress={onCancel}
-            disabled={loading}
+            disabled={isSubmitting}
           >
             <Text style={styles.cancelButtonText}>Cancel</Text>
           </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.button, styles.submitButton, loading && styles.disabledButton]}
-            onPress={handleSubmit}
-            disabled={loading}
-          >
-            {loading ? (
-              <ActivityIndicator color="#FFFFFF" size="small" />
-            ) : (
-              <Text style={styles.submitButtonText}>Continue</Text>
-            )}
-          </TouchableOpacity>
         </View>
-      </View>
-    </KeyboardAvoidingView>
+
+        <View style={styles.footer}>
+          <Text style={styles.footerText}>
+            Don't have a teacher code? Contact your administrator for access.
+          </Text>
+        </View>
+          </View>
+        </TouchableWithoutFeedback>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f2ec',
+    // backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  backdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  keyboardContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: '100%',
   },
   content: {
-    flex: 1,
-    paddingHorizontal: 30,
-    justifyContent: 'center',
+    width: '90%',
+    maxWidth: 400,
+    backgroundColor: 'rgba(208, 216, 192, 0.95)',
+    borderRadius: 20,
+    padding: 24,
+    // shadowColor: '#000',
+    // shadowOffset: {
+    //   width: 0,
+    //   height: 10,
+    // },
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
+    elevation: 10,
+    backdropFilter: 'blur(10px)',
   },
   header: {
     alignItems: 'center',
-    marginBottom: 40,
+    marginBottom: 24,
   },
   title: {
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: 'bold',
-    color: '#6B8E23',
-    marginTop: 20,
-    marginBottom: 10,
+    color: '#1a1a1a',
+    marginBottom: 8,
     textAlign: 'center',
   },
   subtitle: {
-    fontSize: 16,
+    fontSize: 14,
     color: '#666',
+    marginBottom: 4,
     textAlign: 'center',
-    lineHeight: 22,
   },
-  inputContainer: {
-    marginBottom: 30,
+  email: {
+    fontSize: 14,
+    color: '#007AFF',
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  form: {
+    marginTop: 8,
   },
   label: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
-    color: '#333',
+    color: '#1a1a1a',
     marginBottom: 8,
   },
   input: {
-    borderWidth: 2,
-    borderColor: '#E0E0E0',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    fontSize: 16,
-    backgroundColor: '#FFFFFF',
-    color: '#333',
-  },
-  helpText: {
-    fontSize: 14,
-    color: '#666',
-    marginTop: 8,
-    textAlign: 'center',
-  },
-  buttonContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 15,
-  },
-  button: {
-    flex: 1,
-    paddingVertical: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cancelButton: {
-    backgroundColor: '#F5F5F5',
     borderWidth: 1,
-    borderColor: '#E0E0E0',
+    borderColor: 'rgba(0, 0, 0, 0.1)',
+    borderRadius: 12,
+    padding: 14,
+    fontSize: 16,
+    marginBottom: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
   },
   submitButton: {
-    backgroundColor: '#6B8E23',
+    backgroundColor: '#007AFF',
+    borderRadius: 12,
+    padding: 16,
+    alignItems: 'center',
+    marginBottom: 12,
+    shadowColor: '#007AFF',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
-  disabledButton: {
-    opacity: 0.6,
+  submitButtonDisabled: {
+    backgroundColor: 'rgba(204, 204, 204, 0.8)',
+    shadowOpacity: 0,
+  },
+  submitButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  cancelButton: {
+    padding: 14,
+    alignItems: 'center',
+    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.44)',
   },
   cancelButtonText: {
     color: '#666',
-    fontSize: 16,
-    fontWeight: '600',
+    fontSize: 15,
+    fontWeight: '500',
   },
-  submitButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
+  footer: {
+    marginTop: 20,
+    alignItems: 'center',
+  },
+  footerText: {
+    fontSize: 13,
+    color: '#666',
+    textAlign: 'center',
+    lineHeight: 18,
+    opacity: 0.8,
   },
 });
-

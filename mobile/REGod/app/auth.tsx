@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'expo-router';
+import TeacherCodeInput from '../components/TeacherCodeInput';
+import { useAuth as useAuthContext } from '../src/contexts/AuthContext';
 import {
   View,
   Text,
@@ -14,18 +17,20 @@ import {
   Animated,
   Easing,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
-import { VideoView, useVideoPlayer } from 'expo-video';
+import { VideoView, useVideoPlayer, VideoSource } from 'expo-video';
 import { setAudioModeAsync } from 'expo-audio';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { useSignIn, useSignUp, isClerkAPIResponseError, useOAuth } from '@clerk/clerk-expo';
+import { useSignIn, useSignUp, isClerkAPIResponseError, useSSO, useUser, useClerk } from '@clerk/clerk-expo';
 import { useAuth } from '../src/contexts/AuthContext';
 import Logo from '../assets/images/logo.png';
 import ApiService from '../src/services/api';
 import GoogleLogo from '../components/GoogleLogo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import VideoCacheService from '../src/services/videoCache';
 
 const { width, height } = Dimensions.get('window');
 
@@ -48,27 +53,73 @@ export default function AuthScreen() {
   const [resetCode, setResetCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showTeacherCodeInput, setShowTeacherCodeInput] = useState(false);
+  const [teacherCodeUserEmail, setTeacherCodeUserEmail] = useState('');
+  
+  // Video caching states
+  const [videoSource, setVideoSource] = useState<VideoSource | null>(null);
+  const [videoLoading, setVideoLoading] = useState(true);
+  const [videoDownloadProgress, setVideoDownloadProgress] = useState(0);
 
   const { login, register, error, clearError, isAuthenticated, socialLogin } = useAuth();
   const signUpCtx = useSignUp();
   const signInCtx = useSignIn();
+  const { user: clerkUser } = useUser();
+  const router = useRouter();
+  const clerk = useClerk();
   
-  // OAuth hooks for social login
-  const { startOAuthFlow: startGoogleOAuth } = useOAuth({ strategy: 'oauth_google' });
-  const { startOAuthFlow: startAppleOAuth } = useOAuth({ strategy: 'oauth_apple' });
-  const { startOAuthFlow: startFacebookOAuth } = useOAuth({ strategy: 'oauth_facebook' });
+  // Get user from AuthContext to check for teacher code requirement
+  const { user: authContextUser } = useAuthContext();
+  
+  // SSO hooks for social login
+  const { startSSOFlow } = useSSO();
 
-  // Your existing video player setup code remains the same
-  const player = useVideoPlayer(require('@/assets/videos/Re-God video h264.mov'), (player) => {
+  // Initialize video player with cached video or fallback to bundled video
+  const player = useVideoPlayer(videoSource || require('@/assets/videos/Re-God video h264.mov'), (player) => {
     player.loop = true;
     player.muted = false;
     player.volume = 1;
   });
 
+  // Load cached video on mount
   useEffect(() => {
-    // Your existing video setup code remains the same
+    const loadVideo = async () => {
+      try {
+        setVideoLoading(true);
+        console.log('[Auth] Loading cached video...');
+        
+        const videoUri = await VideoCacheService.getCachedVideoUri((progress) => {
+          setVideoDownloadProgress(progress);
+        });
+        
+        console.log('[Auth] Video loaded:', videoUri);
+        setVideoSource({ uri: videoUri });
+        setVideoLoading(false);
+      } catch (error) {
+        console.error('[Auth] Failed to load video:', error);
+        console.log('[Auth] Using bundled video as fallback');
+        setVideoLoading(false);
+        // Continue with bundled video - no need to show error to user
+      }
+    };
+
+    loadVideo();
+  }, []);
+
+  // Check if AuthContext user needs teacher code
+  useEffect(() => {
+    if (authContextUser && authContextUser.requiresTeacherCode && authContextUser.email) {
+      console.log('AuthContext detected teacher code requirement for:', authContextUser.email);
+      setTeacherCodeUserEmail(authContextUser.email);
+      setShowTeacherCodeInput(true);
+    }
+  }, [authContextUser]);
+
+  // Video player setup (only runs when videoSource is available or after video loads)
+  useEffect(() => {
+    if (!player || videoLoading) return;
+
     let timer: any;
-    if (player) {
       const statusListener = player.addListener('statusChange', (status) => {
         if (!hasFaded) {
           setHasFaded(true);
@@ -115,8 +166,7 @@ export default function AuthScreen() {
         statusListener?.remove();
         if (timer) clearTimeout(timer);
       };
-    }
-  }, [player]);
+  }, [player, videoLoading]);
 
   // Note: Navigation is handled by the main index.tsx file
 
@@ -136,45 +186,146 @@ export default function AuthScreen() {
   const handleSocialLogin = async (provider: 'google' | 'apple' | 'facebook') => {
     try {
       setIsLoading(true);
+      
+      // Check if we're on signup stage and validate teacher code
+      if (stage === 'signup') {
+        if (!teacherCode.trim()) {
+          Alert.alert('Teacher Code Required', 'Please enter a teacher code to create an account');
+          setIsLoading(false);
+          return;
+        }
+        
+        if (!name.trim()) {
+          Alert.alert('Name Required', 'Please enter your full name to create an account');
+          setIsLoading(false);
+          return;
+        }
+      }
+      
       console.log(`Starting ${provider} OAuth flow...`);
+      console.log(`Current stage: ${stage}, teacherCode: "${teacherCode}", name: "${name}"`);
       
-      // Select the appropriate OAuth flow based on provider
-      const startOAuthFlow = provider === 'google' ? startGoogleOAuth :
-                             provider === 'apple' ? startAppleOAuth :
-                             startFacebookOAuth;
+      // Start SSO flow with strategy
+      const { createdSessionId, signIn, signUp, setActive } = await startSSOFlow({
+        strategy: `oauth_${provider}`,
+      });
       
-      // Start OAuth flow
-      const { createdSessionId, signIn, signUp, setActive } = await startOAuthFlow();
+      console.log(`${provider} SSO flow result:`, { 
+        createdSessionId, 
+        hasSignIn: !!signIn, 
+        hasSignUp: !!signUp,
+        signInIdentifier: signIn?.identifier,
+        signUpEmail: signUp?.emailAddress,
+        signInFirstVerification: signIn?.firstFactorVerification,
+        signUpStatus: signUp?.status
+      });
       
       if (createdSessionId) {
         // Set the active session in Clerk
         await setActive?.({ session: createdSessionId });
         
-        // Get user email from the OAuth response
-        const userEmail = signIn?.identifier || signUp?.emailAddress;
+        // Wait a moment for Clerk to fully set the session and user data to be available
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // Force reload the Clerk session to get the latest user data
+        await clerk.session?.reload();
+        
+        // Get and store the Clerk session token
+        try {
+          const clerkToken = await clerk.session?.getToken();
+          if (clerkToken) {
+            await ApiService.setClerkToken(clerkToken);
+            console.log('Clerk token obtained and stored');
+          } else {
+            console.warn('No Clerk token available from getToken');
+          }
+        } catch (tokenError) {
+          console.error('Error getting Clerk token:', tokenError);
+        }
+        
+        // Get user email from multiple possible sources
+        let userEmail = signIn?.identifier || 
+                        signUp?.emailAddress || 
+                        (signIn as any)?.emailAddress ||
+                        (signUp as any)?.identifier;
+        
+        // If still no email, try to get it from the verification
+        if (!userEmail && signIn?.firstFactorVerification?.verifiedFromTheSameClient) {
+          userEmail = (signIn as any).emailAddress;
+        }
+        
+        // For Apple, the email might be in a different location
+        if (!userEmail && signUp) {
+          // Check if there's an email address in the email addresses array
+          const emailAddresses = (signUp as any).emailAddresses;
+          if (emailAddresses && emailAddresses.length > 0) {
+            userEmail = emailAddresses[0].emailAddress;
+          }
+        }
+        
+        // Try to get email from the authenticated Clerk user (works for Apple and other providers)
+        if (!userEmail && clerk.user) {
+          userEmail = clerk.user.primaryEmailAddress?.emailAddress || 
+                      clerk.user.emailAddresses?.[0]?.emailAddress;
+          console.log(`Got email from Clerk user: ${userEmail}`);
+        }
+        
+        console.log(`Extracted email: ${userEmail} from ${provider} OAuth`);
         
         if (userEmail) {
           console.log(`${provider} OAuth successful, exchanging token...`);
           
-          // Exchange Clerk token for backend token
-          const authResponse = await ApiService.clerkExchange(userEmail);
-          
-          // Store tokens in AsyncStorage
-          await AsyncStorage.setItem('regod_access_token', authResponse.auth_token);
-          await AsyncStorage.setItem('regod_refresh_token', authResponse.refresh_token);
-          
-          if (authResponse.user_data) {
-            await AsyncStorage.setItem('regod_user_data', JSON.stringify(authResponse.user_data));
+          // For signup flow, we need to register the user with teacher code
+          if (stage === 'signup') {
+            console.log(`Taking SIGNUP path for ${provider} - registering with teacher code: ${teacherCode}`);
+            try {
+              // Register user with teacher code using our backend
+              await register(userEmail, '', name.trim(), teacherCode.trim());
+              console.log(`${provider} signup with teacher code complete`);
+            } catch (registerError) {
+              console.error('Registration with teacher code failed:', registerError);
+              Alert.alert('Registration Failed', 'Failed to register with teacher code. Please try again.');
+              setIsLoading(false);
+              return;
+            }
+          } else {
+            console.log(`Taking LOGIN path for ${provider} - exchanging Clerk token`);
+            // For login flow, exchange Clerk token for backend token
+            const authResponse = await ApiService.clerkExchange(userEmail);
+            
+            // Check if user needs a teacher code
+            if (authResponse.requires_teacher_code) {
+              console.log('User needs teacher code:', authResponse.message);
+              setTeacherCodeUserEmail(userEmail);
+              setShowTeacherCodeInput(true);
+              setIsLoading(false);
+              return;
+            }
+            
+            // Store tokens in AsyncStorage (only if they exist)
+            if (authResponse.auth_token) {
+              await AsyncStorage.setItem('regod_access_token', authResponse.auth_token);
+            }
+            if (authResponse.refresh_token) {
+              await AsyncStorage.setItem('regod_refresh_token', authResponse.refresh_token);
+            }
+            
+            if (authResponse.user_data) {
+              await AsyncStorage.setItem('regod_user_data', JSON.stringify(authResponse.user_data));
+            }
+            
+            console.log(`${provider} login complete, user authenticated`);
           }
-          
-          console.log(`${provider} login complete, user authenticated`);
           
           // Navigation will happen automatically via useEffect when isAuthenticated becomes true
         } else {
-          throw new Error('No email found in OAuth response');
+          console.error('No email found in OAuth response. Available data:', { signIn, signUp });
+          throw new Error(`Unable to retrieve email from ${provider}. Please try a different sign-in method or ensure your ${provider} account has an email address.`);
         }
       } else {
-        throw new Error(`${provider} authentication was not completed`);
+        // User cancelled authentication - this is normal behavior, not an error
+        console.log(`${provider} authentication cancelled by user`);
+        return;
       }
     } catch (err: any) {
       console.error(`${provider} login error:`, err);
@@ -214,10 +365,21 @@ export default function AuthScreen() {
 
   // Clerk email verification flow (email code)
   const handleClerkEmailSignup = async () => {
+    if (!name.trim()) {
+      Alert.alert('Error', 'Please enter your name');
+      return;
+    }
+    
+    if (!teacherCode.trim()) {
+      Alert.alert('Error', 'Please enter a teacher code');
+      return;
+    }
+    
     if (!email.trim()) {
       Alert.alert('Error', 'Please enter your email');
       return;
     }
+    
     try {
       setIsLoading(true);
       setEmailForClerk(email.trim());
@@ -249,19 +411,17 @@ export default function AuthScreen() {
       if (res && res.status === 'complete' && res.createdSessionId) {
         await signUpCtx?.setActive?.({ session: res.createdSessionId });
         
-        // Only attempt clerk exchange if we don't already have valid tokens
-        const existingToken = await AsyncStorage.getItem('regod_access_token');
-        if (!existingToken) {
-          try {
-            await ApiService.clerkExchange(emailForClerk || email.trim());
-            console.log('Clerk exchange successful for sign up');
-          } catch (exchangeError) {
-            console.error('Clerk exchange failed for sign up:', exchangeError);
-            // Don't fail the sign up process, but log the error
-          }
-        } else {
-          console.log('User already has valid tokens, skipping clerk exchange');
+        // Register user with teacher code using our backend
+        try {
+          await register(emailForClerk || email.trim(), '', name.trim(), teacherCode.trim());
+          console.log('Clerk signup with teacher code complete');
+        } catch (registerError) {
+          console.error('Registration with teacher code failed:', registerError);
+          Alert.alert('Registration Failed', 'Failed to register with teacher code. Please try again.');
+          setIsLoading(false);
+          return;
         }
+        
         setShowClerkVerify(false);
         // Navigation will be handled by index.tsx
       }
@@ -401,18 +561,30 @@ export default function AuthScreen() {
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
       
-      {/* Your existing video and overlay setup remains the same */}
+      {/* Fallback background */}
       <View style={styles.fallbackBackground} />
       
-      <VideoView
-        player={player}
-        style={styles.videoBackground}
-        allowsFullscreen={false}
-        allowsPictureInPicture={false}
-        contentFit="cover"
-        nativeControls={false}
-        showsTimecodes={false}
-      />
+      {/* Video background with loading state */}
+      {videoLoading ? (
+        <View style={styles.videoLoadingContainer}>
+          <ActivityIndicator size="large" color="#B4B454" />
+          <Text style={styles.videoLoadingText}>
+            {videoDownloadProgress > 0 
+              ? `Loading video... ${Math.round(videoDownloadProgress * 100)}%`
+              : 'Preparing video...'}
+          </Text>
+        </View>
+      ) : (
+        <VideoView
+          player={player}
+          style={styles.videoBackground}
+          allowsFullscreen={false}
+          allowsPictureInPicture={false}
+          contentFit="cover"
+          nativeControls={false}
+          showsTimecodes={false}
+        />
+      )}
       
       <View style={styles.overlay} />
       <Animated.View style={[styles.fadeOverlay, { opacity: fadeAnim }]} />
@@ -434,8 +606,27 @@ export default function AuthScreen() {
               </View>
             )}
 
+            {/* Teacher Code Input Screen */}
+            {showTeacherCodeInput && (
+              <TeacherCodeInput
+                userEmail={teacherCodeUserEmail}
+                onSuccess={() => {
+                  setShowTeacherCodeInput(false);
+                  // Navigate to the main app
+                  router.replace('/(tabs)');
+                }}
+                onCancel={() => {
+                  setShowTeacherCodeInput(false);
+                  // Sign out from Clerk
+                  if (clerk?.signOut) {
+                    clerk.signOut();
+                  }
+                }}
+              />
+            )}
+
             {/* Updated login screen */}
-            {stage === 'login' && (
+            {stage === 'login' && !showTeacherCodeInput && (
               <>
                 <View style={styles.logoContainer}>
                   <Image source={Logo} style={styles.logo}  />
@@ -477,7 +668,7 @@ export default function AuthScreen() {
                   </View>
 
                   <View style={styles.rememberForgotContainer}>
-                    <TouchableOpacity
+                    {/* <TouchableOpacity
                       style={styles.rememberMeContainer}
                       onPress={() => setRememberMe(!rememberMe)}
                     >
@@ -485,7 +676,7 @@ export default function AuthScreen() {
                         {rememberMe && <View style={styles.checkmark} />}
                       </View>
                       <Text style={styles.rememberMeText}>Remember me</Text>
-                    </TouchableOpacity>
+                    </TouchableOpacity> */}
                     <TouchableOpacity onPress={handleForgotPassword}>
                       <Text style={styles.forgotPasswordText}>Forgot password</Text>
                     </TouchableOpacity>
@@ -645,7 +836,7 @@ export default function AuthScreen() {
                       disabled={isLoading}
                     >
                       <GoogleLogo size={20} />
-                      <Text style={styles.socialButtonText}>Sign in with Google</Text>
+                      <Text style={styles.socialButtonText}>Sign up with Google</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
@@ -654,7 +845,7 @@ export default function AuthScreen() {
                       disabled={isLoading}
                     >
                       <Ionicons name="logo-apple" size={20} color="#FFFFFF" />
-                      <Text style={styles.socialButtonText}>Sign in with Apple</Text>
+                      <Text style={styles.socialButtonText}>Sign up with Apple</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
@@ -663,16 +854,16 @@ export default function AuthScreen() {
                       disabled={isLoading}
                     >
                       <Ionicons name="logo-facebook" size={20} color="#1877F2" />
-                      <Text style={styles.socialButtonText}>Sign in with Facebook</Text>
+                      <Text style={styles.socialButtonText}>Sign up with Facebook</Text>
                     </TouchableOpacity>
                   </View>
 
                   {/* Clerk hosted email verification flow */}
                   {!showClerkVerify && (
                     <TouchableOpacity
-                      style={[styles.createAccountButton, isLoading && { opacity: 0.7 }]}
+                      style={[styles.createAccountButton, (isLoading || !name.trim() || !teacherCode.trim()) && { opacity: 0.7 }]}
                       onPress={handleClerkEmailSignup}
-                      disabled={isLoading}
+                      disabled={isLoading || !name.trim() || !teacherCode.trim()}
                     >
                       <Text style={styles.createAccountButtonText}>
                         {isLoading ? 'Sending code...' : 'Create account'}
@@ -833,6 +1024,22 @@ const styles = StyleSheet.create({
     width: width,
     height: height,
     zIndex: 1,
+  },
+  videoLoadingContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: width,
+    height: height,
+    zIndex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#000000',
+  },
+  videoLoadingText: {
+    marginTop: 16,
+    color: '#B4B454',
+    fontSize: 16,
   },
   overlay: {
     position: 'absolute',

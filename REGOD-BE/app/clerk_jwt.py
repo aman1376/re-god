@@ -128,16 +128,21 @@ def verify_clerk_jwt(token: str) -> Dict[str, Any]:
             detail={"error": {"code": "TOKEN_EXPIRED", "message": "Token has expired"}}
         )
     except jwt.InvalidTokenError as e:
-        logger.error(f"Invalid token: {e}")
+        logger.debug(f"Invalid Clerk JWT token (expected for regular JWTs): {e}")
         raise HTTPException(
             status_code=401,
             detail={"error": {"code": "INVALID_TOKEN", "message": "Invalid token"}}
         )
+    except HTTPException:
+        # Re-raise HTTPExceptions without logging (these are expected control flow)
+        raise
     except Exception as e:
-        logger.error(f"Token verification error: {e}")
+        import traceback
+        logger.error(f"Unexpected token verification error: {type(e).__name__}: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=500,
-            detail={"error": {"code": "TOKEN_VERIFICATION_FAILED", "message": "Token verification failed"}}
+            detail={"error": {"code": "TOKEN_VERIFICATION_FAILED", "message": f"Token verification failed: {str(e)}"}}
         )
 
 

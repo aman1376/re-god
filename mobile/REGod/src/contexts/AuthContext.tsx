@@ -5,18 +5,12 @@ import * as WebBrowser from 'expo-web-browser';
 import * as AuthSession from 'expo-auth-session';
 import * as Crypto from 'expo-crypto';
 import { router } from 'expo-router';
-import ApiService, { type User } from '../services/api';
+import ApiService, { type User, type AuthResponse } from '../services/api';
+import { NotificationService } from '../services/notificationService';
 
 // Configure WebBrowser for OAuth
 WebBrowser.maybeCompleteAuthSession();
 
-interface AuthResponse {
-  user_id: string;
-  auth_token: string;
-  refresh_token: string;
-  user_data?: any;
-  requires_verification?: boolean;
-}
 
 interface AuthContextType {
   user: User | null;
@@ -48,6 +42,30 @@ interface AuthProviderProps {
   children: ReactNode;
 }
 
+// Helper function to normalize user data (handles both 'role' and 'roles' formats)
+const normalizeUserData = (userData: any): User | null => {
+  if (!userData) return null;
+  
+  // Extract role from either 'role' field or 'roles' array
+  let role = userData.role;
+  if (!role && userData.roles && Array.isArray(userData.roles) && userData.roles.length > 0) {
+    role = userData.roles[0];
+  }
+  if (!role) {
+    role = 'student'; // default role
+  }
+  
+  return {
+    id: String(userData.id),
+    email: userData.email || '',
+    name: userData.name || 'User',
+    role,
+    verified: userData.is_verified || userData.verified || false,
+    phone: userData.phone,
+    avatar_url: userData.avatar_url
+  };
+};
+
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -59,7 +77,34 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const { signOut, getToken } = useClerkAuth();
   const { user: clerkUser, isSignedIn } = useUser();
 
+  // Helper function to register push token
+  const registerPushToken = async () => {
+    try {
+      const expoPushToken = NotificationService.getExpoPushToken();
+      if (expoPushToken) {
+        await ApiService.registerPushToken(expoPushToken);
+        console.log('Push token registered successfully');
+      } else {
+        console.log('No push token available to register (normal in development)');
+      }
+    } catch (error) {
+      console.error('Failed to register push token:', error);
+    }
+  };
+
   useEffect(() => {
+    // Initialize notifications
+    const initializeNotifications = async () => {
+      try {
+        await NotificationService.initialize();
+        console.log('Notifications initialized successfully');
+      } catch (error) {
+        console.error('Failed to initialize notifications:', error);
+      }
+    };
+
+    initializeNotifications();
+
     // Set up periodic token refresh check (every 5 minutes)
     const tokenRefreshInterval = setInterval(async () => {
       const token = await AsyncStorage.getItem('regod_access_token');
@@ -104,8 +149,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             if (storedUserData && storedTokens) {
               try {
                 const parsedUser = JSON.parse(storedUserData);
-                setUser(parsedUser);
-                console.log('Using stored user data');
+                const normalized = normalizeUserData(parsedUser);
+                setUser(normalized);
+                console.log('Using stored user data:', normalized);
+                // Register push token for notifications
+                await registerPushToken();
                 setLoading(false);
                 authenticationInProgress.current = false;
                 return; // Skip authentication if we have valid stored data
@@ -136,26 +184,83 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
               console.warn('No Clerk token available from getToken');
             }
 
+            // Check if we already have valid JWT tokens
+            const existingAccessToken = await AsyncStorage.getItem('regod_access_token');
+            const existingRefreshToken = await AsyncStorage.getItem('regod_refresh_token');
+            
+            console.log('AuthContext: Checking existing tokens:', {
+              hasAccessToken: !!existingAccessToken,
+              hasRefreshToken: !!existingRefreshToken,
+              accessTokenLength: existingAccessToken?.length || 0
+            });
+            
+            if (existingAccessToken && existingRefreshToken) {
+              console.log('User already has JWT tokens, skipping Clerk exchange');
+              // Just set the user data from stored info
+              const storedUserData = await AsyncStorage.getItem('regod_user_data');
+              if (storedUserData) {
+                const parsedUser = JSON.parse(storedUserData);
+                const normalized = normalizeUserData(parsedUser);
+                setUser(normalized);
+                console.log('Using existing JWT tokens and stored user data:', normalized);
+                // Register push token for notifications
+                await registerPushToken();
+                setLoading(false);
+                authenticationInProgress.current = false;
+                return;
+              } else {
+                console.log('No stored user data found, will proceed with Clerk exchange');
+              }
+            } else {
+              console.log('No valid JWT tokens found, will proceed with Clerk exchange');
+            }
+            
             // Try Clerk exchange first to get JWT tokens
             try {
               console.log('Attempting Clerk exchange to get JWT tokens...');
               const exchangeResponse = await ApiService.clerkExchange(email);
               
-              // Store the JWT tokens from exchange
-              await AsyncStorage.setItem('regod_access_token', exchangeResponse.auth_token);
-              await AsyncStorage.setItem('regod_refresh_token', exchangeResponse.refresh_token);
+              // Check if user needs a teacher code
+              if (exchangeResponse.requires_teacher_code) {
+                console.log('User needs teacher code:', exchangeResponse.message);
+                // Store user data and set user state but don't set as authenticated yet
+                if (exchangeResponse.user_data) {
+                  const normalized = normalizeUserData(exchangeResponse.user_data);
+                  if (normalized) {
+                    normalized.requiresTeacherCode = true;
+                    setUser(normalized); // Set user state so it's available
+                    await AsyncStorage.setItem('regod_user_data', JSON.stringify(normalized));
+                    console.log('User data stored and set, teacher code required:', normalized);
+                  }
+                }
+                return; // Don't proceed with authentication
+              }
+              
+              // Store the JWT tokens from exchange (only if they exist)
+              if (exchangeResponse.auth_token) {
+                await AsyncStorage.setItem('regod_access_token', exchangeResponse.auth_token);
+              }
+              if (exchangeResponse.refresh_token) {
+                await AsyncStorage.setItem('regod_refresh_token', exchangeResponse.refresh_token);
+              }
               
               // Use the user data from exchange or fetch profile
               if (exchangeResponse.user_data) {
-                setUser(exchangeResponse.user_data);
-                await AsyncStorage.setItem('regod_user_data', JSON.stringify(exchangeResponse.user_data));
-                console.log('User migrated to JWT tokens via Clerk exchange:', exchangeResponse.user_data);
+                const normalized = normalizeUserData(exchangeResponse.user_data);
+                setUser(normalized);
+                await AsyncStorage.setItem('regod_user_data', JSON.stringify(normalized));
+                console.log('User migrated to JWT tokens via Clerk exchange:', normalized);
+                // Register push token for notifications
+                await registerPushToken();
               } else {
                 // Fetch profile with new JWT token
                 const profile = await ApiService.getProfile();
-                setUser(profile);
-                await AsyncStorage.setItem('regod_user_data', JSON.stringify(profile));
-                console.log('User profile fetched after Clerk exchange:', profile);
+                const normalized = normalizeUserData(profile);
+                setUser(normalized);
+                await AsyncStorage.setItem('regod_user_data', JSON.stringify(normalized));
+                console.log('User profile fetched after Clerk exchange:', normalized);
+                // Register push token for notifications
+                await registerPushToken();
               }
               
               console.log('Authentication complete, user should be navigated to main app');
@@ -238,9 +343,13 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         password,
       });
       
-      // Store tokens in AsyncStorage
-      await AsyncStorage.setItem('regod_access_token', response.auth_token);
-      await AsyncStorage.setItem('regod_refresh_token', response.refresh_token);
+      // Store tokens in AsyncStorage (only if they exist)
+      if (response.auth_token) {
+        await AsyncStorage.setItem('regod_access_token', response.auth_token);
+      }
+      if (response.refresh_token) {
+        await AsyncStorage.setItem('regod_refresh_token', response.refresh_token);
+      }
       
       if (response.user_data) {
         setUser(response.user_data);
@@ -277,9 +386,13 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       
       const response = await ApiService.register(registerData);
       
-      // Store tokens in AsyncStorage
-      await AsyncStorage.setItem('regod_access_token', response.auth_token);
-      await AsyncStorage.setItem('regod_refresh_token', response.refresh_token);
+      // Store tokens in AsyncStorage (only if they exist)
+      if (response.auth_token) {
+        await AsyncStorage.setItem('regod_access_token', response.auth_token);
+      }
+      if (response.refresh_token) {
+        await AsyncStorage.setItem('regod_refresh_token', response.refresh_token);
+      }
       
       // Get profile after registration
       try {
@@ -434,8 +547,13 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         try {
           const exchangeResponse = await ApiService.clerkExchange(email);
           
-          await AsyncStorage.setItem('regod_access_token', exchangeResponse.auth_token);
-          await AsyncStorage.setItem('regod_refresh_token', exchangeResponse.refresh_token);
+          // Store tokens only if they exist
+          if (exchangeResponse.auth_token) {
+            await AsyncStorage.setItem('regod_access_token', exchangeResponse.auth_token);
+          }
+          if (exchangeResponse.refresh_token) {
+            await AsyncStorage.setItem('regod_refresh_token', exchangeResponse.refresh_token);
+          }
           
           if (exchangeResponse.user_data) {
             setUser(exchangeResponse.user_data);
@@ -501,9 +619,13 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       // Try Clerk exchange
       const exchangeResponse = await ApiService.clerkExchange(email);
       
-      // Store JWT tokens
-      await AsyncStorage.setItem('regod_access_token', exchangeResponse.auth_token);
-      await AsyncStorage.setItem('regod_refresh_token', exchangeResponse.refresh_token);
+      // Store JWT tokens (only if they exist)
+      if (exchangeResponse.auth_token) {
+        await AsyncStorage.setItem('regod_access_token', exchangeResponse.auth_token);
+      }
+      if (exchangeResponse.refresh_token) {
+        await AsyncStorage.setItem('regod_refresh_token', exchangeResponse.refresh_token);
+      }
       
       // Update user data
       if (exchangeResponse.user_data) {

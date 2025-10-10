@@ -3,10 +3,10 @@ from sqlalchemy.orm import Session
 from typing import List
 import secrets
 import string
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from app.database import get_db
-from app.models import User, TeacherCode, TeacherCodeUse, StudentTeacherAccess
+from app.models import User, TeacherCode, TeacherCodeUse, TeacherAssignment
 from app.schemas import (
     TeacherCodeCreate, TeacherCodeResponse, TeacherCodeUseRequest, 
     TeacherCodeUseResponse, StudentAccessResponse
@@ -25,7 +25,7 @@ def generate_teacher_code(length=8):
 @require_role("teacher")
 async def create_teacher_code(
     code_data: TeacherCodeCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Create a new teacher code (teachers only)"""
@@ -38,7 +38,7 @@ async def create_teacher_code(
         )
     
     # Teachers can only create codes for themselves
-    if code_data.teacher_id != current_user.id and not current_user.has_role("admin"):
+    if code_data.teacher_id != current_user["id"] and not current_user.get("role") == "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You can only create codes for yourself"
@@ -76,12 +76,12 @@ async def create_teacher_code(
 @router.get("/teacher-codes", response_model=List[TeacherCodeResponse])
 @require_role("teacher")
 async def get_teacher_codes(
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get all teacher codes for the current teacher"""
     teacher_codes = db.query(TeacherCode).filter(
-        TeacherCode.teacher_id == current_user.id
+        TeacherCode.teacher_id == current_user["id"]
     ).all()
     
     response = []
@@ -89,8 +89,8 @@ async def get_teacher_codes(
         response.append(TeacherCodeResponse(
             id=code.id,
             code=code.code,
-            teacher_id=code.teacher_id,
-            teacher_name=current_user.name,
+            teacher_id=str(code.teacher_id),
+            teacher_name=current_user["name"],
             created_at=code.created_at,
             max_uses=code.max_uses,
             expires_at=code.expires_at,
@@ -103,16 +103,64 @@ async def get_teacher_codes(
 @router.post("/use-teacher-code", response_model=TeacherCodeUseResponse)
 async def use_teacher_code(
     code_request: TeacherCodeUseRequest,
-    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Use a teacher code to gain access to content"""
+    current_user = None
+    
+    # Try to get current user from user data first (for students without valid tokens)
+    if code_request.user_data:
+        current_user = {
+            "id": code_request.user_data.get("id"),
+            "email": code_request.user_data.get("email"),
+            "role": "student"  # Assume student role for teacher code usage
+        }
+        print(f"Using user data from request: {current_user}")
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User data must be provided"
+        )
+    
     # Students only can use teacher codes
-    if not current_user.has_role("student"):
+    if current_user.get("role") != "student":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only students can use teacher codes"
         )
+    
+    # Find or create the user in the database
+    user_id = current_user.get("id")
+    user_email = current_user.get("email")
+    
+    if not user_id or not user_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User ID and email are required"
+        )
+    
+    # Try to find user by ID first, then by email
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        user = db.query(User).filter(User.email == user_email).first()
+    
+    if not user:
+        # Create new user if doesn't exist
+        from uuid import uuid4
+        user = User(
+            id=uuid4(),
+            email=user_email,
+            name=current_user.get("name", "User"),
+            is_active=True,
+            is_verified=False
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        print(f"Created new user: {user.email}")
+    
+    # Update current_user with the actual user ID from database
+    current_user["id"] = str(user.id)
     
     # Find the teacher code
     teacher_code = db.query(TeacherCode).filter(
@@ -127,7 +175,7 @@ async def use_teacher_code(
         )
     
     # Check if code has expired
-    if teacher_code.expires_at and teacher_code.expires_at < datetime.utcnow():
+    if teacher_code.expires_at and teacher_code.expires_at < datetime.now(timezone.utc):
         teacher_code.is_active = False
         db.commit()
         return TeacherCodeUseResponse(
@@ -147,7 +195,7 @@ async def use_teacher_code(
     # Check if student already used this code
     existing_use = db.query(TeacherCodeUse).filter(
         TeacherCodeUse.code_id == teacher_code.id,
-        TeacherCodeUse.student_id == current_user.id
+        TeacherCodeUse.student_id == current_user["id"]
     ).first()
     
     if existing_use:
@@ -157,12 +205,12 @@ async def use_teacher_code(
         )
     
     # Check if student already has access to this teacher
-    existing_access = db.query(StudentTeacherAccess).filter(
-        StudentTeacherAccess.student_id == current_user.id,
-        StudentTeacherAccess.teacher_id == teacher_code.teacher_id
+    existing_assignment = db.query(TeacherAssignment).filter(
+        TeacherAssignment.student_id == current_user["id"],
+        TeacherAssignment.teacher_id == teacher_code.teacher_id
     ).first()
     
-    if existing_access:
+    if existing_assignment and existing_assignment.active:
         return TeacherCodeUseResponse(
             success=False,
             message="You already have access to this teacher's content"
@@ -171,17 +219,23 @@ async def use_teacher_code(
     # Create teacher code use record
     code_use = TeacherCodeUse(
         code_id=teacher_code.id,
-        student_id=current_user.id
+        student_id=current_user["id"]
     )
     db.add(code_use)
     
-    # Create student-teacher access record
-    student_access = StudentTeacherAccess(
-        student_id=current_user.id,
-        teacher_id=teacher_code.teacher_id,
-        granted_via_code=True
-    )
-    db.add(student_access)
+    # Create teacher assignment record
+    if existing_assignment:
+        # Reactivate existing assignment
+        existing_assignment.active = True
+    else:
+        # Create new assignment
+        teacher_assignment = TeacherAssignment(
+            student_id=current_user["id"],
+            teacher_id=teacher_code.teacher_id,
+            active=True,
+            assigned_by=teacher_code.teacher_id  # The teacher who created the code
+        )
+        db.add(teacher_assignment)
     
     # Update teacher code use count
     teacher_code.use_count += 1
@@ -199,13 +253,13 @@ async def use_teacher_code(
 
 @router.get("/student-access", response_model=List[StudentAccessResponse])
 async def get_student_access(
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get all teachers that the current student has access to"""
-    access_records = db.query(StudentTeacherAccess).filter(
-        StudentTeacherAccess.student_id == current_user.id,
-        StudentTeacherAccess.is_active == True
+    access_records = db.query(TeacherAssignment).filter(
+        TeacherAssignment.student_id == current_user["id"],
+        TeacherAssignment.active == True
     ).all()
     
     response = []
@@ -213,7 +267,7 @@ async def get_student_access(
         teacher = db.query(User).filter(User.id == access.teacher_id).first()
         response.append(StudentAccessResponse(
             student_id=access.student_id,
-            student_name=current_user.name,
+            student_name=current_user["name"],
             teacher_id=access.teacher_id,
             teacher_name=teacher.name if teacher else "Unknown Teacher",
             granted_at=access.granted_at,
@@ -224,14 +278,14 @@ async def get_student_access(
 
 @router.get("/check-teacher-assignment")
 async def check_teacher_assignment(
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Check if the current user has a teacher assigned"""
     # Check if user has any active teacher assignments
-    access_record = db.query(StudentTeacherAccess).filter(
-        StudentTeacherAccess.student_id == current_user.id,
-        StudentTeacherAccess.is_active == True
+    access_record = db.query(TeacherAssignment).filter(
+        TeacherAssignment.student_id == current_user["id"],
+        TeacherAssignment.active == True
     ).first()
     
     if access_record:
@@ -255,13 +309,13 @@ async def check_teacher_assignment(
 @require_role("teacher")
 async def delete_teacher_code(
     code_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Delete a teacher code"""
     teacher_code = db.query(TeacherCode).filter(
         TeacherCode.id == code_id,
-        TeacherCode.teacher_id == current_user.id
+        TeacherCode.teacher_id == current_user["id"]
     ).first()
     
     if not teacher_code:

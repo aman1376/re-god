@@ -101,11 +101,14 @@ export default function MeScreen() {
 
     const fetchTeacherCode = async () => {
       try {
-        // TODO: Implement API call to get teacher code
-        // For now, using mock data
-        setTeacherCode('TCH' + Math.random().toString(36).substr(2, 6).toUpperCase());
+        if (isAdminOrTeacher) {
+          const teacherCodeData = await ApiService.getTeacherCode();
+          setTeacherCode(teacherCodeData.teacher_code);
+        }
       } catch (error) {
         console.error("Failed to fetch teacher code:", error);
+        // Fallback to empty string if API call fails
+        setTeacherCode('');
       }
     };
 
@@ -256,6 +259,50 @@ export default function MeScreen() {
     }
   };
 
+  const handleDeleteAccount = async () => {
+    Alert.alert(
+      'Delete Account',
+      'Are you sure you want to delete your account? This action cannot be undone and you will lose all your data, including courses, notes, and progress.',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel'
+        },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              // Show loading state (optional)
+              await ApiService.deleteAccount();
+              
+              // Show success message
+              Alert.alert(
+                'Account Deleted',
+                'Your account has been successfully deleted.',
+                [
+                  {
+                    text: 'OK',
+                    onPress: async () => {
+                      // Clear tokens and logout
+                      await logout();
+                      // Navigate to auth screen
+                      router.replace('/auth');
+                    }
+                  }
+                ]
+              );
+            } catch (error) {
+              console.error('Error deleting account:', error);
+              const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+              Alert.alert('Error', `Failed to delete account: ${errorMessage}`);
+            }
+          }
+        }
+      ]
+    );
+  };
+
   const handleSetReminder = async () => {
     try {
       if (!Notifications) {
@@ -325,22 +372,36 @@ export default function MeScreen() {
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
       
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+      <ScrollView 
+        style={styles.scrollView} 
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        bounces={true}
+        alwaysBounceVertical={false}
+      >
         {/* Profile Section */}
         <View style={styles.profileSection}>
           <View style={styles.avatarContainer}>
             <View style={styles.avatarShadowContainer}>
-              <Image 
-                source={profileImage ? { uri: profileImage } : require('@/assets/images/favicon.png')} 
-                style={styles.avatar}
-                onError={(error) => {
-                  console.error('Image load error:', error);
-                  console.error('Failed to load image URL:', profileImage);
-                }}
-                onLoad={() => {
-                  console.log('Image loaded successfully:', profileImage);
-                }}
-              />
+              {user?.avatar_url || profileImage ? (
+                <Image 
+                  source={{ uri: (user?.avatar_url || profileImage)! }} 
+                  style={styles.avatar}
+                  onError={(error) => {
+                    console.error('Image load error:', error);
+                    console.error('Failed to load image URL:', user?.avatar_url || profileImage);
+                  }}
+                  onLoad={() => {
+                    console.log('Image loaded successfully:', user?.avatar_url || profileImage);
+                  }}
+                />
+              ) : (
+                <View style={[styles.avatar, styles.defaultAvatar]}>
+                  <Text style={styles.avatarInitials}>
+                    {user?.name ? user.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) : '?'}
+                  </Text>
+                </View>
+              )}
             </View>
             {isUploadingImage && (
               <View style={styles.uploadingOverlay}>
@@ -399,7 +460,7 @@ export default function MeScreen() {
                 >
                   <View style={styles.menuItemLeft}>
                     <Ionicons name="document-text-outline" size={20} color="#95928d" />
-                    <Text style={styles.menuItemText}>Student Responses</Text>
+                    <Text style={styles.menuItemText}>Notes</Text>
                   </View>
                   <Ionicons name="chevron-forward" size={20} color="#95928d" />
                 </TouchableOpacity>
@@ -522,6 +583,14 @@ export default function MeScreen() {
               }}
             >
               <Text style={styles.logoutButtonText}>Logout</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles.section}>
+            <TouchableOpacity style={styles.menuItem} onPress={handleDeleteAccount}>
+              <View style={styles.menuItemLeft}>
+                <Ionicons name="trash-outline" size={20} color="#95928d" />
+                <Text style={styles.menuItemText}>Delete Account</Text>
+              </View>
             </TouchableOpacity>
           </View>
         </View>
@@ -724,7 +793,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingBottom: 100,
+    flexGrow: 1,
+    paddingBottom: 40,
   },
   profileSection: {
     alignItems: 'center',
@@ -756,6 +826,16 @@ const styles = StyleSheet.create({
     width: 120,
     height: 120,
     borderRadius: 60,
+  },
+  defaultAvatar: {
+    backgroundColor: '#e0e0e0',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarInitials: {
+    fontSize: 48,
+    fontWeight: 'bold',
+    color: '#666',
   },
   uploadingOverlay: {
     position: 'absolute',

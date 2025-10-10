@@ -31,9 +31,11 @@ __pycache__/
 # Python virtual environment
 REGOD-BE/regod-env/
 
-# Env files
+# Env files and sensitive configs
 .env*
 *.env
+docker-compose.yml
+REGOD-BE/docker-compose.yml
 
 # TypeScript
 *.tsbuildinfo

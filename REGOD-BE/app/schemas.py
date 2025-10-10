@@ -7,7 +7,15 @@ class UserBase(BaseModel):
     email: Optional[str] = None
     name: str
     phone: Optional[str] = None
+    age: Optional[int] = None
     avatar_url: Optional[str] = None
+    # Church-related fields
+    church_admin_name: Optional[str] = None
+    home_church: Optional[str] = None
+    country: Optional[str] = None
+    city: Optional[str] = None
+    postal_code: Optional[str] = None
+    church_admin_cell_phone: Optional[str] = None
 
 class UserCreate(UserBase):
     password: str
@@ -26,6 +34,19 @@ class UserResponse(UserBase):
     
     class Config:
         from_attributes = True
+
+class UserProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    age: Optional[int] = None
+    avatar_url: Optional[str] = None
+    church_admin_name: Optional[str] = None
+    home_church: Optional[str] = None
+    country: Optional[str] = None
+    city: Optional[str] = None
+    postal_code: Optional[str] = None
+    church_admin_cell_phone: Optional[str] = None
 
 class Token(BaseModel):
     access_token: str
@@ -108,12 +129,12 @@ class TeacherCodeBase(BaseModel):
     expires_at: Optional[datetime] = None
 
 class TeacherCodeCreate(TeacherCodeBase):
-    teacher_id: int
+    teacher_id: str
 
 class TeacherCodeResponse(TeacherCodeBase):
     id: int
     code: str
-    teacher_id: int
+    teacher_id: str
     teacher_name: str
     created_at: datetime
     use_count: int
@@ -124,6 +145,7 @@ class TeacherCodeResponse(TeacherCodeBase):
 
 class TeacherCodeUseRequest(BaseModel):
     code: str
+    user_data: Optional[dict] = None
 
 class TeacherCodeUseResponse(BaseModel):
     success: bool
@@ -194,6 +216,30 @@ class ModuleBase(BaseModel):
     media_url: Optional[str] = None  # consolidated audio/video URL
     quiz: Optional[Any] = None
 
+class ModuleUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    order: Optional[int] = None
+    chapter_id: Optional[int] = None
+    # Extended lesson fields
+    content: Optional[str] = None
+    key_verses: Optional[str] = None
+    key_verses_ref: Optional[str] = None
+    key_verses_json: Optional[Any] = None
+    lesson_study: Optional[str] = None
+    lesson_study_ref: Optional[str] = None
+    response_prompt: Optional[str] = None
+    music_selection: Optional[str] = None
+    further_study: Optional[str] = None
+    further_study_json: Optional[Any] = None
+    personal_experiences: Optional[str] = None
+    resources: Optional[str] = None
+    resources_json: Optional[Any] = None
+    artwork: Optional[str] = None
+    header_image_url: Optional[str] = None
+    media_url: Optional[str] = None  # consolidated audio/video URL
+    quiz: Optional[Any] = None
+
 class ModuleResponse(ModuleBase):
     id: int
     course_id: int
@@ -243,11 +289,12 @@ class FavoriteResponse(FavoriteBase):
 class MessageBase(BaseModel):
     content: str
     message_type: Optional[str] = "text"
+    thread_id: Optional[int] = None
 
 class MessageResponse(MessageBase):
     id: int
     thread_id: int
-    sender_id: int
+    sender_id: str
     sender_name: str
     sender_type: str
     timestamp: datetime
@@ -258,13 +305,15 @@ class MessageResponse(MessageBase):
 
 class ThreadResponse(BaseModel):
     id: int
-    user_id: int
-    assigned_teacher_id: Optional[int] = None
+    user_id: str
+    assigned_teacher_id: Optional[str] = None
     recipient_name: Optional[str] = None
     recipient_avatar: Optional[str] = None
     is_online: bool = False
     unread_count: int = 0
     created_at: datetime
+    last_message: Optional[str] = None
+    last_message_time: Optional[str] = None
     
     class Config:
         from_attributes = True
@@ -273,6 +322,8 @@ class ThreadResponse(BaseModel):
 class NoteBase(BaseModel):
     title: Optional[str] = None
     content: str
+    course_id: Optional[int] = None
+    lesson_id: Optional[int] = None
 
 class NoteResponse(NoteBase):
     id: int

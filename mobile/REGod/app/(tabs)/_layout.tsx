@@ -9,15 +9,20 @@ import { IconSymbol } from '@/components/ui/IconSymbol';
 import TabBarBackground from '@/components/ui/TabBarBackground';
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
+import { useAuth } from '../../src/contexts/AuthContext';
 
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
   const router = useRouter();
   const segments = useSegments();
+  const { user } = useAuth();
   
   // Check if we're on the notes screen
   const isNotesScreen = segments.some(segment => segment === 'notes');
+  
+  // Check if user is teacher or admin
+  const isTeacherOrAdmin = user?.role === 'teacher' || user?.role === 'admin';
 
   return (
     <Tabs
@@ -66,8 +71,14 @@ export default function TabLayout() {
       <Tabs.Screen
         name="favorites"
         options={{
-          title: 'Favorites',
-          tabBarIcon: ({ color }) => <Ionicons name="heart-outline" size={26} color={color} />,
+          title: isTeacherOrAdmin ? 'Responses' : 'Favorites',
+          tabBarIcon: ({ color }) => (
+            <Ionicons 
+              name={isTeacherOrAdmin ? "clipboard-outline" : "heart-outline"} 
+              size={26} 
+              color={color} 
+            />
+          ),
           href: isNotesScreen ? null : undefined,
         }}
       />

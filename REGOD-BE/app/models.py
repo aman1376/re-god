@@ -42,11 +42,20 @@ class User(Base):
     hashed_password = Column(String, nullable=True)
     name = Column(String, nullable=False)
     phone = Column(String, nullable=True)
+    age = Column(Integer, nullable=True)
     avatar_url = Column(String, nullable=True)
     clerk_user_id = Column(String, nullable=True, unique=True, index=True)
     is_active = Column(Boolean, default=True)
     is_verified = Column(Boolean, default=False)
     onboarding_completed = Column(Boolean, default=False)
+    expo_push_token = Column(String, nullable=True)
+    # Church-related fields
+    church_admin_name = Column(String, nullable=True)
+    home_church = Column(String, nullable=True)
+    country = Column(String, nullable=True)
+    city = Column(String, nullable=True)
+    postal_code = Column(String, nullable=True)
+    church_admin_cell_phone = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_login = Column(DateTime(timezone=True), nullable=True)
 
@@ -170,7 +179,7 @@ class TeacherCode(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     code = Column(String, unique=True, index=True, nullable=False)
-    teacher_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    teacher_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     expires_at = Column(DateTime(timezone=True), nullable=True)
     max_uses = Column(Integer, default=1)
@@ -178,15 +187,15 @@ class TeacherCode(Base):
     is_active = Column(Boolean, default=True)
 
     teacher = relationship("User", foreign_keys=[teacher_id])
-    student_uses = relationship("TeacherCodeUse", back_populates="teacher_code")
+    student_uses = relationship("TeacherCodeUse", back_populates="teacher_code", cascade="all, delete-orphan")
 
 
 class TeacherCodeUse(Base):
     __tablename__ = "teacher_code_uses"
 
     id = Column(Integer, primary_key=True, index=True)
-    code_id = Column(Integer, ForeignKey("teacher_codes.id"), nullable=False)
-    student_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    code_id = Column(Integer, ForeignKey("teacher_codes.id", ondelete="CASCADE"), nullable=False)
+    student_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     used_at = Column(DateTime(timezone=True), server_default=func.now())
 
     teacher_code = relationship("TeacherCode", back_populates="student_uses")
@@ -197,8 +206,8 @@ class StudentTeacherAccess(Base):
     __tablename__ = "student_teacher_access"
 
     id = Column(Integer, primary_key=True, index=True)
-    student_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    teacher_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    student_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    teacher_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     granted_at = Column(DateTime(timezone=True), server_default=func.now())
     granted_via_code = Column(Boolean, default=True)
     is_active = Column(Boolean, default=True)
@@ -220,10 +229,13 @@ class Course(Base):
     category = Column(String, nullable=True)
     difficulty = Column(String, nullable=True)
     total_modules = Column(Integer, default=0)
-    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=False)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    # Relationships
+    chapters = relationship("Chapter", back_populates="course", cascade="all, delete-orphan")
+    modules = relationship("Module", back_populates="course", cascade="all, delete-orphan")
     creator = relationship("User", foreign_keys=[created_by])
 
 
@@ -231,23 +243,23 @@ class Chapter(Base):
     __tablename__ = "chapters"
 
     id = Column(Integer, primary_key=True, index=True)
-    course_id = Column(Integer, ForeignKey("courses.id"), nullable=False)
+    course_id = Column(Integer, ForeignKey("courses.id", ondelete="CASCADE"), nullable=False)
     title = Column(String, nullable=False)
     cover_image_url = Column(String, nullable=True)
     order = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)
     quiz = Column(JSONB, nullable=True)
 
-    course = relationship("Course")
-    modules = relationship("Module", back_populates="chapter")
+    course = relationship("Course", back_populates="chapters")
+    modules = relationship("Module", back_populates="chapter", cascade="all, delete-orphan")
 
 
 class Module(Base):
     __tablename__ = "modules"
 
     id = Column(Integer, primary_key=True, index=True)
-    course_id = Column(Integer, ForeignKey("courses.id"))
-    chapter_id = Column(Integer, ForeignKey("chapters.id"), nullable=True)
+    course_id = Column(Integer, ForeignKey("courses.id", ondelete="CASCADE"))
+    chapter_id = Column(Integer, ForeignKey("chapters.id", ondelete="CASCADE"), nullable=True)
     title = Column(String, index=True, nullable=False)
     description = Column(Text, nullable=True)
     # Content fields to support mobile lesson page
@@ -271,7 +283,7 @@ class Module(Base):
     order = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)
 
-    course = relationship("Course")
+    course = relationship("Course", back_populates="modules")
     chapter = relationship("Chapter", back_populates="modules")
 
 
@@ -279,9 +291,9 @@ class UserCourseProgress(Base):
     __tablename__ = "user_course_progress"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    course_id = Column(Integer, ForeignKey("courses.id"))
-    last_visited_module_id = Column(Integer, ForeignKey("modules.id"), nullable=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
+    course_id = Column(Integer, ForeignKey("courses.id", ondelete="CASCADE"))
+    last_visited_module_id = Column(Integer, ForeignKey("modules.id", ondelete="SET NULL"), nullable=True)
     progress_percentage = Column(Float, default=0.0)
     started_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True), nullable=True)
@@ -297,9 +309,9 @@ class UserModuleProgress(Base):
     __tablename__ = "user_module_progress"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    course_id = Column(Integer, ForeignKey("courses.id"))
-    module_id = Column(Integer, ForeignKey("modules.id"))
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
+    course_id = Column(Integer, ForeignKey("courses.id", ondelete="CASCADE"))
+    module_id = Column(Integer, ForeignKey("modules.id", ondelete="CASCADE"))
     status = Column(String, default="not_started")  # not_started, in_progress, completed
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
@@ -308,10 +320,11 @@ class UserNote(Base):
     __tablename__ = "user_notes"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    course_id = Column(Integer, ForeignKey("courses.id"))
-    lesson_id = Column(Integer, ForeignKey("modules.id"))
-    note_content = Column(Text, nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
+    course_id = Column(Integer, ForeignKey("courses.id", ondelete="CASCADE"), nullable=True)
+    lesson_id = Column(Integer, ForeignKey("modules.id", ondelete="CASCADE"), nullable=True)
+    title = Column(String(255), nullable=True)
+    content = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -325,21 +338,21 @@ class ChatThread(Base):
     __tablename__ = "chat_threads"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    assigned_teacher_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
+    assigned_teacher_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     user = relationship("User", back_populates="chat_threads", foreign_keys=[user_id])
     teacher = relationship("User", foreign_keys=[assigned_teacher_id])
-    messages = relationship("ChatMessage", back_populates="thread")
+    messages = relationship("ChatMessage", back_populates="thread", cascade="all, delete-orphan")
 
 
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
 
     id = Column(Integer, primary_key=True, index=True)
-    thread_id = Column(Integer, ForeignKey("chat_threads.id"))
-    sender_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    thread_id = Column(Integer, ForeignKey("chat_threads.id", ondelete="CASCADE"))
+    sender_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"))
     sender_type = Column(String, default="user")  # user or teacher
     content = Column(Text, nullable=False)
     message_type = Column(String, default="text")  # text, image, file
@@ -355,8 +368,8 @@ class UserFavorite(Base):
     __tablename__ = "user_favorites"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    lesson_id = Column(Integer, ForeignKey("modules.id"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    lesson_id = Column(Integer, ForeignKey("modules.id", ondelete="CASCADE"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     user = relationship("User", back_populates="favorites")
@@ -372,8 +385,8 @@ class UserChapterFavorite(Base):
     __tablename__ = "user_chapter_favorites"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    chapter_id = Column(Integer, ForeignKey("chapters.id"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    chapter_id = Column(Integer, ForeignKey("chapters.id", ondelete="CASCADE"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     user = relationship("User", back_populates="chapter_favorites")
@@ -382,3 +395,21 @@ class UserChapterFavorite(Base):
     __table_args__ = (
         UniqueConstraint('user_id', 'chapter_id', name='unique_user_chapter_favorite'),
     )
+
+# Quiz Response Model
+class QuizResponse(Base):
+    __tablename__ = "quiz_responses"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    course_id = Column(Integer, ForeignKey("courses.id", ondelete="CASCADE"), nullable=False)
+    module_id = Column(Integer, ForeignKey("modules.id", ondelete="CASCADE"), nullable=False)
+    question = Column(Text, nullable=False)
+    answer = Column(Text, nullable=False)
+    question_type = Column(String(50), nullable=False)  # 'multiple_choice', 'text', 'reflection'
+    submitted_at = Column(DateTime(timezone=True), default=func.now(), nullable=False)
+    
+    # Relationships
+    user = relationship("User")
+    course = relationship("Course")
+    module = relationship("Module")

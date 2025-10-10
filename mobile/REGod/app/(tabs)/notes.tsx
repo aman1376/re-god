@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator, Alert, StatusBar } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator, Alert, StatusBar, Animated, PanResponder, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import ApiService, { type Note } from '../../src/services/api';
+import { useCallback } from 'react';
+
+const { width: screenWidth } = Dimensions.get('window');
 
 export default function NotesScreen() {
   const router = useRouter();
@@ -15,6 +18,13 @@ export default function NotesScreen() {
   useEffect(() => {
     loadNotes();
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      console.log('Notes screen focused - refreshing data');
+      loadNotes();
+    }, [])
+  );
 
   const loadNotes = async () => {
     try {
@@ -34,54 +44,154 @@ export default function NotesScreen() {
     router.push({ pathname: '/new-note', params: { noteId: note.id.toString() } });
   };
 
-  const handleDeleteNote = async (noteId: number) => {
-    Alert.alert(
-      'Delete Note',
-      'Are you sure you want to delete this note?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await ApiService.deleteNote(noteId);
-              setNotes(notes.filter(note => note.id !== noteId));
-              Alert.alert('Success', 'Note deleted successfully');
-            } catch (err) {
-              Alert.alert('Error', 'Failed to delete note');
-              console.error('Error deleting note:', err);
-            }
-          },
-        },
-      ]
-    );
-  };
 
   const filteredNotes = notes.filter(note =>
     (note.content && note.content.toLowerCase().includes(searchQuery.toLowerCase())) ||
     (note.title && note.title.toLowerCase().includes(searchQuery.toLowerCase()))
   );
 
+  const SwipeableNoteItem = ({ item }: { item: Note }) => {
+    const translateX = new Animated.Value(0);
+    const deleteOpacity = new Animated.Value(0);
+
+    const panResponder = PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        return Math.abs(gestureState.dx) > 10;
+      },
+      onPanResponderMove: (_, gestureState) => {
+        if (gestureState.dx < 0) {
+          translateX.setValue(gestureState.dx);
+          const opacity = Math.min(Math.abs(gestureState.dx) / 100, 1);
+          deleteOpacity.setValue(opacity);
+        }
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dx < -100) {
+          // Show delete confirmation first, then animate based on user choice
+          Alert.alert(
+            'Delete Note',
+            'Are you sure you want to delete this note?',
+            [
+              { 
+                text: 'Cancel', 
+                style: 'cancel',
+                onPress: () => {
+                  // Reset position when user cancels
+                  Animated.parallel([
+                    Animated.spring(translateX, {
+                      toValue: 0,
+                      useNativeDriver: true,
+                    }),
+                    Animated.spring(deleteOpacity, {
+                      toValue: 0,
+                      useNativeDriver: true,
+                    }),
+                  ]).start();
+                }
+              },
+              {
+                text: 'Delete',
+                style: 'destructive',
+                onPress: async () => {
+                  // Animate deletion and then actually delete
+                  Animated.parallel([
+                    Animated.timing(translateX, {
+                      toValue: -screenWidth,
+                      duration: 200,
+                      useNativeDriver: true,
+                    }),
+                    Animated.timing(deleteOpacity, {
+                      toValue: 1,
+                      duration: 200,
+                      useNativeDriver: true,
+                    }),
+                  ]).start(async () => {
+                    try {
+                      await ApiService.deleteNote(item.id);
+                      setNotes(notes.filter(note => note.id !== item.id));
+                      Alert.alert('Success', 'Note deleted successfully');
+                    } catch (err) {
+                      Alert.alert('Error', 'Failed to delete note');
+                      console.error('Error deleting note:', err);
+                      // Reset position if delete fails
+                      Animated.parallel([
+                        Animated.spring(translateX, {
+                          toValue: 0,
+                          useNativeDriver: true,
+                        }),
+                        Animated.spring(deleteOpacity, {
+                          toValue: 0,
+                          useNativeDriver: true,
+                        }),
+                      ]).start();
+                    }
+                  });
+                },
+              },
+            ]
+          );
+        } else {
+          // Reset position for incomplete swipe
+          Animated.parallel([
+            Animated.spring(translateX, {
+              toValue: 0,
+              useNativeDriver: true,
+            }),
+            Animated.spring(deleteOpacity, {
+              toValue: 0,
+              useNativeDriver: true,
+            }),
+          ]).start();
+        }
+      },
+    });
+
+    return (
+      <View style={styles.swipeContainer}>
+        {/* Delete background */}
+        <Animated.View 
+          style={[
+            styles.deleteBackground,
+            { opacity: deleteOpacity }
+          ]}
+        >
+          <Ionicons name="trash" size={24} color="white" />
+          <Text style={styles.deleteText}>Delete</Text>
+        </Animated.View>
+        
+        {/* Note item */}
+        <Animated.View
+          style={[
+            styles.noteItem,
+            { transform: [{ translateX }] }
+          ]}
+          {...panResponder.panHandlers}
+        >
+          <TouchableOpacity
+            style={styles.noteItemContent}
+            onPress={() => handleNotePress(item)}
+            activeOpacity={0.7}
+          >
+            <View style={styles.noteIcon}>
+              <Ionicons name="pencil" size={20} color="#56621c" />
+            </View>
+            <View style={styles.noteContent}>
+              <Text style={styles.noteTitle} numberOfLines={1}>
+                {new Date(item.created_at).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' })} | {item.title || 'Note'}
+              </Text>
+              <Text style={styles.notePreview} numberOfLines={2}>
+                {item.content || 'Note preview. Some sort of text preview or note of something...'}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#C7C7CC" />
+          </TouchableOpacity>
+        </Animated.View>
+      </View>
+    );
+  };
+
   const renderNoteItem = ({ item }: { item: Note }) => (
-    <TouchableOpacity
-      style={styles.noteItem}
-      onPress={() => handleNotePress(item)}
-      onLongPress={() => handleDeleteNote(item.id)}
-    >
-      <View style={styles.noteIcon}>
-        <Ionicons name="pencil" size={20} color="#56621c" />
-      </View>
-      <View style={styles.noteContent}>
-        <Text style={styles.noteTitle} numberOfLines={1}>
-          {new Date(item.created_at).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' })} | {item.title || 'Note'}
-        </Text>
-        <Text style={styles.notePreview} numberOfLines={2}>
-          {item.content || 'Note preview. Some sort of text preview or note of something...'}
-        </Text>
-      </View>
-      <Ionicons name="chevron-forward" size={20} color="#C7C7CC" />
-    </TouchableOpacity>
+    <SwipeableNoteItem item={item} />
   );
 
   if (loading) {
@@ -193,18 +303,44 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingBottom: 100,
   },
-  noteItem: {
-    flexDirection: 'row',
+  swipeContainer: {
+    position: 'relative',
+    marginBottom: 8,
+    overflow: 'hidden',
+    borderRadius: 12,
+  },
+  deleteBackground: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#FF3B30',
+    justifyContent: 'center',
     alignItems: 'center',
+    borderRadius: 12,
+    zIndex: 1,
+  },
+  deleteText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  noteItem: {
     backgroundColor: 'white',
     borderRadius: 12,
-    padding: 16,
-    marginBottom: 8,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
     shadowRadius: 2,
     elevation: 1,
+    zIndex: 2,
+  },
+  noteItemContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
   },
   noteIcon: {
     marginRight: 12,

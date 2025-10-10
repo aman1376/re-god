@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, TextInput, ActivityIndicator, Alert, StatusBar } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import ApiService, { type Note } from '../src/services/api';
 
@@ -16,14 +16,33 @@ export default function NotesScreen() {
     loadNotes();
   }, []);
 
+  // Refresh notes when screen comes into focus
+  useFocusEffect(
+    React.useCallback(() => {
+      loadNotes();
+    }, [])
+  );
+
   const loadNotes = async () => {
     try {
+      console.log('Notes screen: Starting to load notes...');
       setLoading(true);
+      setError(null);
       const notesData = await ApiService.getNotes();
+      console.log('Notes screen: Received notes data:', notesData);
       setNotes(notesData);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load notes');
-      console.error('Error loading notes:', err);
+      console.error('Notes screen: Error loading notes:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Failed to load notes';
+      
+      // Check if it's an authentication error
+      if (errorMessage.includes('Token verification failed') || 
+          errorMessage.includes('401') || 
+          errorMessage.includes('Unauthorized')) {
+        setError('Please sign in again to view your notes');
+      } else {
+        setError(errorMessage);
+      }
     } finally {
       setLoading(false);
     }

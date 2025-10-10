@@ -48,11 +48,11 @@ export function QuickLinks() {
             </div>
           </div>
 
-          <div className="p-4 border border-gray-200 rounded-lg">
+          {/* <div className="p-4 border border-gray-200 rounded-lg">
             <h4 className="font-semibold text-gray-900">Upload (Local)</h4>
             <input ref={fileRef} onChange={handleLocalUpload} type="file" className="block mt-2 text-sm" />
             {msg && <div className="text-xs text-gray-600 mt-1">{msg}</div>}
-          </div>
+          </div> */}
         </div>
       </CardContent>
     </Card>

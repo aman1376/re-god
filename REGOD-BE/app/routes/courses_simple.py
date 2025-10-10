@@ -17,7 +17,7 @@ async def test_endpoint():
 
 @router.get("/user/dashboard", response_model=DashboardResponse)
 async def get_user_dashboard(
-    current_user: User = Depends(get_current_user), 
+    current_user: dict = Depends(get_current_user), 
     db: Session = Depends(get_db)
 ):
     """Get user dashboard with access control based on teacher relationships"""
@@ -55,7 +55,7 @@ async def get_user_dashboard(
 @router.get("/courses/{course_id}/modules", response_model=List[ModuleResponse])
 async def get_course_modules(
     course_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get all modules for a specific course"""
@@ -71,7 +71,7 @@ async def get_course_modules(
 @router.post("/learn/progress")
 async def update_course_progress(
     progress_data: UserCourseProgressBase,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Update user's course progress"""
@@ -103,7 +103,7 @@ async def update_course_progress(
 # Course management endpoints
 @router.get("/courses", response_model=List[CourseResponse])
 async def get_courses(
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get all courses accessible to the user"""
@@ -114,7 +114,7 @@ async def get_courses(
 @require_role(["admin", "teacher"])
 async def create_course(
     course_data: CourseBase,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Create a new course"""
@@ -136,7 +136,7 @@ async def create_course(
 async def update_course(
     course_id: int,
     course_data: CourseBase,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Update a course"""
@@ -157,7 +157,7 @@ async def update_course(
 async def create_module(
     course_id: int,
     module_data: ModuleBase,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Create a new module (lesson) for a course"""
@@ -201,7 +201,7 @@ async def update_module(
     course_id: int,
     module_id: int,
     module_data: ModuleBase,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Update a module (lesson)"""
@@ -226,7 +226,7 @@ async def update_module(
 async def create_chapter(
     course_id: int,
     chapter_data: ChapterBase,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Create a new chapter for a course"""
@@ -250,7 +250,7 @@ async def create_chapter(
 @router.get("/courses/{course_id}/chapters", response_model=List[ChapterResponse])
 async def list_chapters(
     course_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get all chapters for a course"""
@@ -266,7 +266,7 @@ async def update_chapter(
     course_id: int,
     chapter_id: int,
     chapter_data: ChapterBase,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Update a chapter"""

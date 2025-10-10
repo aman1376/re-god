@@ -81,12 +81,14 @@ interface LoginData {
   password: string;
 }
 
-interface AuthResponse {
+export interface AuthResponse {
   user_id: string;
-  auth_token: string;
-  refresh_token: string;
+  auth_token: string | null;
+  refresh_token: string | null;
   user_data?: any;
   requires_verification?: boolean;
+  requires_teacher_code?: boolean;
+  message?: string;
 }
 
 interface User {
@@ -97,6 +99,7 @@ interface User {
   verified: boolean;
   phone?: string;
   avatar_url?: string;
+  requiresTeacherCode?: boolean;
 }
 
 interface Course {
@@ -291,6 +294,19 @@ class ApiService {
         }
 
         // Handle other errors
+        console.error('API Error Response:', {
+          status: response.status,
+          data: data,
+          url: response.url
+        });
+        // Handle validation errors with more detail
+        if (response.status === 422 && data.detail) {
+          const validationErrors = Array.isArray(data.detail) 
+            ? data.detail.map((err: any) => `${err.loc?.join('.')}: ${err.msg}`).join(', ')
+            : data.detail;
+          throw new Error(`Validation Error: ${validationErrors}`);
+        }
+        
         const errorMessage = data.error?.message || data.detail || data.message || `Request failed with status ${response.status}`;
         throw new Error(errorMessage);
       }
@@ -454,6 +470,14 @@ class ApiService {
     try {
       // Get the Clerk token specifically for this exchange
       let clerkToken = await AsyncStorage.getItem('clerk_session_token');
+      
+      // Debug logging to help troubleshoot
+      console.log(`[ApiService] Looking for Clerk token (attempt ${retryCount + 1}):`, {
+        hasToken: !!clerkToken,
+        tokenLength: clerkToken?.length || 0,
+        identifier,
+        retryCount
+      });
     
     // If no token and we haven't retried, wait a bit and try again
     if (!clerkToken && retryCount < 3) {
@@ -463,6 +487,7 @@ class ApiService {
     }
     
     if (!clerkToken) {
+      console.error('[ApiService] No Clerk token available after all retries');
       throw new Error('No Clerk token available for exchange after retries');
     }
 
@@ -502,8 +527,15 @@ class ApiService {
     }
 
     const data = await this.handleResponse(response);
-    await AsyncStorage.setItem('regod_access_token', data.auth_token);
-    await AsyncStorage.setItem('regod_refresh_token', data.refresh_token);
+    
+    // Only store tokens if they exist (not null/undefined)
+    if (data.auth_token) {
+      await AsyncStorage.setItem('regod_access_token', data.auth_token);
+    }
+    if (data.refresh_token) {
+      await AsyncStorage.setItem('regod_refresh_token', data.refresh_token);
+    }
+    
     return data;
     } finally {
       // Always clear the lock when done
@@ -610,6 +642,19 @@ class ApiService {
 
   static async getCourseModules(courseId: number): Promise<Module[]> {
     return this.makeAuthenticatedRequest<Module[]>(`/courses/${courseId}/modules`);
+  }
+
+  static async updateModule(courseId: number, moduleId: number, moduleData: Partial<Module>): Promise<Module> {
+    return this.makeAuthenticatedRequest<Module>(`/courses/${courseId}/modules/${moduleId}`, {
+      method: 'PUT',
+      body: JSON.stringify(moduleData),
+    });
+  }
+
+  static async deleteModule(courseId: number, moduleId: number): Promise<{ message: string }> {
+    return this.makeAuthenticatedRequest<{ message: string }>(`/courses/${courseId}/modules/${moduleId}`, {
+      method: 'DELETE',
+    });
   }
 
   static async getCourseChapters(courseId: number): Promise<Chapter[]> {
@@ -844,33 +889,79 @@ class ApiService {
   }
 
   // Chat endpoints (match backend /api/connect/*)
-  static async sendChatMessage(message: string): Promise<ChatResponse> {
-    // Ensure a thread exists and get its id
-    const thread = await this.getOrCreateThread();
-    const data = await this.makeAuthenticatedRequest<any>('/connect/thread/messages', {
+  static async sendChatMessage(message: string, threadId?: string): Promise<void> {
+    let thread_id: string;
+    
+    if (threadId) {
+      // Use the provided thread ID
+      thread_id = threadId;
+      console.log('[API] sendChatMessage using provided thread_id:', thread_id);
+    } else {
+      // Fallback to getting thread from getOrCreateThread (for backward compatibility)
+      const thread = await this.getOrCreateThread();
+      thread_id = thread.thread_id;
+      console.log('[API] sendChatMessage using fallback thread_id:', thread_id);
+    }
+    
+    await this.makeAuthenticatedRequest<any>('/connect/thread/messages', {
       method: 'POST',
       body: JSON.stringify({
-        thread_id: thread.thread_id,
+        thread_id: thread_id,
         content: message,
       }),
     });
-    return { message: data.message || data.content } as ChatResponse;
+    // No return value needed - this just saves the message for the teacher
   }
 
-  static async getChatHistory(): Promise<Message[]> {
-    const thread = await this.getOrCreateThread();
-    const data = await this.makeAuthenticatedRequest<any>(`/connect/thread/messages?thread_id=${encodeURIComponent(thread.thread_id)}`);
-    const list = (data.messages || []) as any[];
-    return list.map((msg, idx) => ({
-      id: String(idx),
-      text: msg.content,
-      sender: msg.sender_name === 'You' ? 'user' : 'assistant',
-      timestamp: new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    }));
+  static async getChatHistory(threadId?: string): Promise<Message[]> {
+    let thread_id: string;
+    
+    console.log('[API] getChatHistory called with threadId:', threadId);
+    
+    if (threadId) {
+      // Use the provided thread ID
+      thread_id = threadId;
+      console.log('[API] Using provided thread_id:', thread_id);
+    } else {
+      // Fallback to getting thread from getOrCreateThread (for backward compatibility)
+      const thread = await this.getOrCreateThread();
+      thread_id = thread.thread_id;
+      console.log('[API] Using fallback thread_id from getOrCreateThread:', thread_id);
+    }
+    
+    const url = `/connect/thread/messages?thread_id=${encodeURIComponent(thread_id)}`;
+    console.log('[API] Making request to:', url);
+    
+    const data = await this.makeAuthenticatedRequest<any>(url);
+    // Backend returns array directly, not wrapped in messages property
+    const list = Array.isArray(data) ? data : (data.messages || []);
+    console.log('[Chat] Raw messages from backend for thread_id:', thread_id, 'messages:', list);
+    
+    return list.map((msg: any, idx: number) => {
+      // Determine sender based on sender_type
+      // 'user' = student sending message, 'teacher' = teacher responding
+      const isUserMessage = msg.sender_type === 'user' || msg.sender_type === 'student';
+      const sender = isUserMessage ? 'user' : 'assistant';
+      
+      console.log(`[Chat] Message ${idx}: sender_type=${msg.sender_type}, sender_name=${msg.sender_name}, mapped_to=${sender}, content="${msg.content}"`);
+      
+      return {
+        id: String(msg.id || idx),
+        text: msg.content,
+        sender,
+        timestamp: new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+    });
   }
 
   private static async getOrCreateThread(): Promise<{ thread_id: string; recipient_name?: string; unread_count?: number }> {
-    return this.makeAuthenticatedRequest('/connect/thread');
+    const data = await this.makeAuthenticatedRequest<any>('/connect/thread');
+    // Backend returns 'id', but we need 'thread_id' for compatibility
+    return {
+      thread_id: String(data.id),
+      recipient_name: data.recipient_name,
+      unread_count: data.unread_count
+    };
   }
 
   // Favourites endpoints (spelling per backend)
@@ -899,6 +990,30 @@ class ApiService {
   }
 
   static async uploadProfilePicture(imageUri: string): Promise<{ path: string; public_url: string }> {
+    // Use Supabase storage if configured
+    const SupabaseStorage = await import('./supabaseStorage').then(m => m.default);
+    if (SupabaseStorage.isConfigured()) {
+      try {
+        const userData = await AsyncStorage.getItem('regod_user_data');
+        if (userData) {
+          const user = JSON.parse(userData);
+          const result = await SupabaseStorage.uploadAvatar(user.id, imageUri);
+          
+          // Update user profile with new avatar URL
+          await this.updateProfile({ avatar_url: result.publicUrl });
+          
+          return {
+            path: result.path,
+            public_url: result.publicUrl,
+          };
+        }
+      } catch (error) {
+        console.error('[UPLOAD] Supabase upload failed, falling back to backend:', error);
+        // Fall through to backend upload
+      }
+    }
+
+    // Fallback to backend upload
     const formData = new FormData();
     
     // Generate a filename
@@ -959,6 +1074,52 @@ class ApiService {
     };
   }
 
+  // Supabase storage methods
+  static async uploadCourseCover(courseId: number, imageUri: string): Promise<{ path: string; public_url: string }> {
+    const SupabaseStorage = await import('./supabaseStorage').then(m => m.default);
+    
+    if (!SupabaseStorage.isConfigured()) {
+      throw new Error('Supabase storage is not configured');
+    }
+
+    const result = await SupabaseStorage.uploadCourseCover(courseId, imageUri);
+    
+    return {
+      path: result.path,
+      public_url: result.publicUrl,
+    };
+  }
+
+  static async uploadChapterBanner(courseId: number, chapterId: number, imageUri: string): Promise<{ path: string; public_url: string }> {
+    const SupabaseStorage = await import('./supabaseStorage').then(m => m.default);
+    
+    if (!SupabaseStorage.isConfigured()) {
+      throw new Error('Supabase storage is not configured');
+    }
+
+    const result = await SupabaseStorage.uploadChapterBanner(courseId, chapterId, imageUri);
+    
+    return {
+      path: result.path,
+      public_url: result.publicUrl,
+    };
+  }
+
+  static async uploadLessonThumbnail(courseId: number, chapterId: number, lessonId: number, imageUri: string): Promise<{ path: string; public_url: string }> {
+    const SupabaseStorage = await import('./supabaseStorage').then(m => m.default);
+    
+    if (!SupabaseStorage.isConfigured()) {
+      throw new Error('Supabase storage is not configured');
+    }
+
+    const result = await SupabaseStorage.uploadLessonThumbnail(courseId, chapterId, lessonId, imageUri);
+    
+    return {
+      path: result.path,
+      public_url: result.publicUrl,
+    };
+  }
+
   // Admin endpoints (if user is admin)
   static async getAdminStats() {
     return this.makeAuthenticatedRequest('/admin/stats');
@@ -966,6 +1127,12 @@ class ApiService {
 
   static async getTeachersDirectory() {
     return this.makeAuthenticatedRequest('/admin/teachers');
+  }
+
+  static async deleteUserAccount(userId: string): Promise<{ message: string; user_id: string; reassigned_students: number }> {
+    return this.makeAuthenticatedRequest(`/admin/users/${userId}`, {
+      method: 'DELETE',
+    });
   }
 
   // Teacher code endpoints
@@ -1000,6 +1167,12 @@ class ApiService {
 
   static async deleteChapterFavorite(favoriteId: number): Promise<{ message: string }> {
     return this.makeAuthenticatedRequest(`/user/chapter-favourites/${favoriteId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  static async deleteAccount(): Promise<{ message: string }> {
+    return this.makeAuthenticatedRequest('/user/account', {
       method: 'DELETE',
     });
   }
@@ -1183,16 +1356,60 @@ class ApiService {
   }
 
   // Connect/Teacher-Student endpoints
-  static async getAssignedTeacher(): Promise<{ id: string; name: string; avatar_url?: string; is_online: boolean }> {
-    return this.makeAuthenticatedRequest('/connect/thread');
+  static async getAssignedTeacher(): Promise<{ 
+    id: string; 
+    name: string; 
+    avatar_url?: string; 
+    is_online: boolean;
+    last_message?: string;
+    last_message_time?: string;
+    unread_count?: number;
+  }> {
+    const data = await this.makeAuthenticatedRequest<any>('/connect/thread');
+    return {
+      id: String(data.id),
+      name: data.recipient_name || 'Teacher',
+      avatar_url: data.recipient_avatar,
+      is_online: data.is_online,
+      last_message: data.last_message,
+      last_message_time: data.last_message_time,
+      unread_count: data.unread_count
+    };
   }
 
-  static async getAssignedStudents(): Promise<Array<{ id: string; name: string; avatar_url?: string; is_online: boolean; last_message?: string; last_message_time?: string }>> {
+  static async getAssignedStudents(): Promise<Array<{ 
+    id: string; 
+    name: string; 
+    avatar_url?: string; 
+    is_online: boolean; 
+    last_message?: string; 
+    last_message_time?: string;
+    unread_count?: number;
+    thread_id?: number;
+  }>> {
     return this.makeAuthenticatedRequest('/connect/students');
   }
 
   static async getStudentAccess(): Promise<Array<{ teacher_id: string; teacher_name: string; granted_at: string; is_active: boolean }>> {
     return this.makeAuthenticatedRequest('/student-access');
+  }
+
+  static async getQuizResponses(page: number = 1, limit: number = 20): Promise<Array<{
+    id: string;
+    student_name: string;
+    course_title: string;
+    chapter_title: string;
+    module_title: string;
+    question: string;
+    answer: string;
+    question_type: string;
+    submitted_at: string;
+    module_id: number;
+    course_id: number;
+    score: number;
+    total_responses: number;
+  }>> {
+    return this.makeAuthenticatedRequest(`/quiz-responses?page=${page}&limit=${limit}`);
   }
 
   static async useTeacherCode(code: string): Promise<{ success: boolean; message: string; teacher_name?: string }> {
@@ -1211,6 +1428,25 @@ class ApiService {
     });
   }
 
+  static async getTeacherCode(): Promise<{ teacher_code: string; is_active: boolean; use_count: number; max_uses: number }> {
+    const codes = await this.makeAuthenticatedRequest<any[]>('/teacher-codes', {
+      method: 'GET',
+    });
+    
+    // Return the first active teacher code
+    if (codes && Array.isArray(codes) && codes.length > 0) {
+      const activeCode = codes.find((code: any) => code.is_active) || codes[0];
+      return {
+        teacher_code: activeCode.code,
+        is_active: activeCode.is_active,
+        use_count: activeCode.use_count,
+        max_uses: activeCode.max_uses
+      };
+    }
+    
+    throw new Error('No teacher codes found');
+  }
+
   static async getStoredToken(): Promise<string | null> {
     // Try access token first
     let token = await AsyncStorage.getItem('regod_access_token');
@@ -1220,22 +1456,42 @@ class ApiService {
     return await AsyncStorage.getItem('clerk_session_token');
   }
 
-  // WebSocket connection for real-time chat
-  static createWebSocketConnection(userId: string): WebSocket {
-    let baseUrl = CONFIG.API_BASE_URL || 'http://localhost:4000/api';
+  static async getStoredUserData(): Promise<string | null> {
+    try {
+      return await AsyncStorage.getItem('regod_user_data');
+    } catch (error) {
+      console.error('Error getting stored user data:', error);
+      return null;
+    }
+  }
 
-    // Convert HTTP/HTTPS to WS/WSS
-    if (baseUrl.startsWith('https://')) {
-      baseUrl = baseUrl.replace('https://', 'wss://');
-    } else if (baseUrl.startsWith('http://')) {
-      baseUrl = baseUrl.replace('http://', 'ws://');
-    } else if (!baseUrl.startsWith('ws://') && !baseUrl.startsWith('wss://')) {
-      // If no protocol specified, assume ws://
-      baseUrl = `ws://${baseUrl}`;
+  // WebSocket connection for real-time chat
+  static async createWebSocketConnection(userId: string): Promise<WebSocket> {
+    // Force fresh URL resolution for WebSocket to match HTTP API
+    await this.clearCache();
+    const httpBaseUrl = await this.base();
+    console.log('[WebSocket] Using base URL:', httpBaseUrl);
+
+    // Get authentication token
+    const token = await AsyncStorage.getItem('regod_access_token');
+    if (!token) {
+      throw new Error('No authentication token available for WebSocket');
     }
 
-    const wsUrl = `${baseUrl}/ws/chat/${userId}`;
-    console.log('[WebSocket] Attempting connection to:', wsUrl);
+    // Convert HTTP/HTTPS to WS/WSS
+    let wsBaseUrl = httpBaseUrl;
+    if (wsBaseUrl.startsWith('https://')) {
+      wsBaseUrl = wsBaseUrl.replace('https://', 'wss://');
+    } else if (wsBaseUrl.startsWith('http://')) {
+      wsBaseUrl = wsBaseUrl.replace('http://', 'ws://');
+    } else if (!wsBaseUrl.startsWith('ws://') && !wsBaseUrl.startsWith('wss://')) {
+      // If no protocol specified, assume ws://
+      wsBaseUrl = `ws://${wsBaseUrl}`;
+    }
+
+    // Use the correct WebSocket endpoint with token as query parameter
+    const wsUrl = `${wsBaseUrl}/connect/socket?token=${encodeURIComponent(token)}`;
+    console.log('[WebSocket] Attempting connection to:', wsUrl.replace(token, 'TOKEN_HIDDEN'));
 
     try {
       return new WebSocket(wsUrl);
@@ -1262,6 +1518,26 @@ class ApiService {
     } catch (error) {
       onError(error);
     }
+  }
+
+  // Push notification methods
+  static async registerPushToken(expoPushToken: string): Promise<{ success: boolean; message: string }> {
+    return this.makeAuthenticatedRequest('/notifications/register-push-token', {
+      method: 'POST',
+      body: JSON.stringify({ expo_push_token: expoPushToken }),
+    });
+  }
+
+  static async unregisterPushToken(): Promise<{ success: boolean; message: string }> {
+    return this.makeAuthenticatedRequest('/notifications/unregister-push-token', {
+      method: 'DELETE',
+    });
+  }
+
+  static async getPushTokenStatus(): Promise<{ has_token: boolean; token_registered: boolean }> {
+    return this.makeAuthenticatedRequest('/notifications/push-token-status', {
+      method: 'GET',
+    });
   }
 }
 

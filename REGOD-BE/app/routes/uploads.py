@@ -21,7 +21,7 @@ def _ensure_upload_dir() -> str:
 @require_role(["admin", "teacher"])  # Admins and teachers can upload
 async def upload_local(
     file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Save file to local disk and return a public URL served from /uploads."""
@@ -49,7 +49,7 @@ async def upload_local(
 @require_role(["admin", "teacher"])  # Admins and teachers can upload
 async def create_s3_presigned_url(
     payload: dict,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Return a presigned PUT URL for S3 upload.

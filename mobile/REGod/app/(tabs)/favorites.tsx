@@ -34,20 +34,7 @@ interface FavoriteMusic {
   artist: string;
 }
 
-// Placeholder data
-const favoriteLessons: FavoriteLesson[] = [
-  { id: '1', title: 'Forgiving', subtitle: 'Inventor of the Roundabout', image: require('@/assets/images/Forgiving-holly-mandarich-wZSFbidc640-unsplash.jpg') },
-  { id: '2', title: 'Just / Fair', subtitle: 'Lesson Title', image: require('@/assets/images/JustFair-toni-minikus.jpg') },
-  { id: '3', title: 'Chapter Title', subtitle: 'Lesson Title', image: require('@/assets/images/Humble-toni-minikus.jpg') },
-  { id: '4', title: 'Chapter Title', subtitle: 'Lesson Title', image: require('@/assets/images/Patient-toni-minikus.jpg') },
-  { id: '5', title: 'Chapter Title', subtitle: 'Lesson Title', image: require('@/assets/images/Powerful-toni-minikus.jpg') },
-  { id: '6', title: 'Chapter Title', subtitle: 'Lesson Title', image: require('@/assets/images/Relational-tim-mossholder-H8_EKl5TgbM-unsplash.jpg') },
-];
 
-const favoriteMusic: FavoriteMusic[] = [
-  { id: '1', title: 'Things We Leave Behind', artist: 'Michael Card' },
-  { id: '2', title: 'Title of the Song', artist: 'Musician' },
-];
 
 export default function FavoritesScreen() {
   const router = useRouter();
@@ -151,55 +138,16 @@ export default function FavoritesScreen() {
         setResponsesLoading(true);
       }
 
-      // TODO: Implement API call to get quiz responses
-      // For now, using mock data
-      const mockResponses = [
-        {
-          id: 1,
-          student_name: 'John Doe',
-          course_title: 'The God You Can Love',
-          chapter_title: 'Chapter 1',
-          module_title: 'Introduction to Love',
-          question: 'What does love mean to you?',
-          answer: 'Love means caring for others and putting their needs before my own.',
-          submitted_at: '2025-01-02T10:30:00Z',
-          module_id: 1,
-          course_id: 4
-        },
-        {
-          id: 2,
-          student_name: 'Jane Smith',
-          course_title: 'The God You Can Love',
-          chapter_title: 'Chapter 1',
-          module_title: 'Understanding Grace',
-          question: 'How has grace impacted your life?',
-          answer: 'Grace has shown me that I am loved despite my mistakes.',
-          submitted_at: '2025-01-02T11:15:00Z',
-          module_id: 2,
-          course_id: 4
-        },
-        {
-          id: 3,
-          student_name: 'Mike Johnson',
-          course_title: 'The God You Can Love',
-          chapter_title: 'Chapter 2',
-          module_title: 'The Nature of God',
-          question: 'True or False: God is always loving.',
-          answer: 'True',
-          submitted_at: '2025-01-02T12:00:00Z',
-          module_id: 3,
-          course_id: 4
-        }
-      ];
+      // Fetch real quiz responses from backend
+      const responses = await ApiService.getQuizResponses(page, 20);
 
       if (reset || page === 1) {
-        setResponses(mockResponses);
+        setResponses(responses);
       } else {
-        setResponses(prev => [...prev, ...mockResponses]);
+        setResponses(prev => [...prev, ...responses]);
       }
 
-      // Simulate pagination - in real implementation, check if there are more pages
-      setHasMoreResponses(page < 3); // Mock: 3 pages max
+      setHasMoreResponses(responses.length === 20); // If we got a full page, there might be more
       setResponsesPage(page);
     } catch (error) {
       console.error('Error loading responses:', error);
@@ -320,7 +268,7 @@ export default function FavoritesScreen() {
         
         <FlatList
           data={responses}
-          keyExtractor={(item, index) => `response-${item.id || index}`}
+          keyExtractor={(item, index) => `response-${index}-${item.id || 'unknown'}`}
           renderItem={({ item }) => (
             <View style={styles.responseCard}>
               <View style={styles.responseHeader}>
@@ -336,6 +284,9 @@ export default function FavoritesScreen() {
                 <Text style={styles.moduleInfo}>{item.module_title}</Text>
                 <Text style={styles.questionText}>Q: {item.question}</Text>
                 <Text style={styles.answerText}>A: {item.answer}</Text>
+                <View style={styles.scoreContainer}>
+                  <Text style={styles.scoreText}>Quiz Score: {item.score}%</Text>
+                </View>
               </View>
             </View>
           )}
@@ -418,8 +369,8 @@ export default function FavoritesScreen() {
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.musicScrollContent}
           >
-            {favoriteMusic.map(item => (
-              <View key={item.id} style={styles.musicItemContainer}>
+            {favoriteMusic.map((item, index) => (
+              <View key={`music-${index}-${item.id}`} style={styles.musicItemContainer}>
                 <MusicCard 
                   title={item.title}
                   mediaUrl={item.mediaUrl}
@@ -727,6 +678,20 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#555',
     lineHeight: 20,
+    marginBottom: 8,
+  },
+  scoreContainer: {
+    backgroundColor: '#f0f8ff',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    alignSelf: 'flex-start',
+    marginTop: 4,
+  },
+  scoreText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#6B8E23',
   },
   loadingMore: {
     padding: 20,

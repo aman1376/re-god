@@ -3,6 +3,7 @@
     "name": "REGod",
     "slug": "REGod",
     "version": "1.0.0",
+    "projectId": "12345678-1234-1234-1234-123456789abc",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "regod",
@@ -32,6 +33,14 @@
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/notification-icon.png",
+          "color": "#ffffff",
+          "defaultChannel": "default"
         }
       ],
       "expo-video",

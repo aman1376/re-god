@@ -1,19 +1,23 @@
 "use client"
 
-import { Home, FileText, Settings, User, LogOut } from "lucide-react"
+import { Home, FileText, Settings, User, LogOut, Users } from "lucide-react"
 import { useRouter, usePathname } from "next/navigation"
+import { useAuth } from "@/contexts/auth-context"
 
 export function Sidebar() {
   const router = useRouter()
   const pathname = usePathname()
+  const { logout, user } = useAuth()
 
   const handleLogout = () => {
-    localStorage.removeItem("isAuthenticated")
-    localStorage.removeItem("userEmail")
-    router.push("/login")
+    logout()
   }
 
   const isActive = (path: string) => pathname === path
+  
+  // Check if user is admin or teacher
+  const isAdmin = user?.roles?.includes('admin') && user?.role === 'admin'
+  const isTeacher = user?.roles?.includes('teacher') || user?.role === 'teacher'
 
   return (
     <div className="w-16 bg-white border-r border-gray-200 flex flex-col items-center py-4">
@@ -38,23 +42,38 @@ export function Sidebar() {
           <span className="text-xs">Content</span>
         </button>
 
+        {(isAdmin || isTeacher) && (
+          <button 
+            onClick={() => router.push("/students")}
+            className={`flex flex-col items-center space-y-1 ${isActive("/students") || pathname?.startsWith("/students/") ? "text-red-800" : "text-gray-400 hover:text-red-800"}`}
+          >
+            <Users className="w-5 h-5" />
+            <span className="text-xs">Students</span>
+          </button>
+        )}
+
         <div className="flex flex-col items-center space-y-1 text-gray-400">
           <Settings className="w-5 h-5" />
           <span className="text-xs">Settings</span>
         </div>
 
-        <div className="flex flex-col items-center space-y-1 text-gray-400">
+        <button
+          onClick={() => router.push("/profile")}
+          className={`flex flex-col items-center space-y-1 ${isActive("/profile") ? "text-red-800" : "text-gray-400 hover:text-red-800"}`}
+        >
           <User className="w-5 h-5" />
           <span className="text-xs">Profile</span>
-        </div>
+        </button>
       </nav>
 
       <div className="mt-auto">
         <button
           onClick={handleLogout}
-          className="flex flex-col items-center space-y-1 text-gray-400 hover:text-red-800"
+          className="flex flex-col items-center space-y-1 text-gray-400 hover:text-red-800 transition-colors duration-200 p-2 rounded-lg hover:bg-red-50"
+          title="Logout"
         >
           <LogOut className="w-5 h-5" />
+          <span className="text-xs">Logout</span>
         </button>
       </div>
     </div>

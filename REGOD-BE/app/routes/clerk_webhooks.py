@@ -75,25 +75,17 @@ async def handle_user_created(user_data: dict, db: Session):
                 db.commit()
             return
         
-        # Create new user in our database
-        user = User(
-            email=email,
-            name=f"{clerk_user.first_name or ''} {clerk_user.last_name or ''}".strip() or clerk_user.username or "User",
-            clerk_user_id=clerk_user.id,
-            is_verified=True
-        )
-        db.add(user)
-        db.flush()  # Flush to get the user ID
+        # Only create users if they're coming through teacher signup flow
+        # Check if this user has a teacher code in their metadata or if they're being created
+        # through the teacher signup process (this would be indicated by specific metadata)
         
-        # Assign default role: prefer 'student', fallback to 'user'
-        role = db.query(Role).filter(Role.name.in_(["student", "user"])).order_by(Role.name == "student").first()
-        if role:
-            user.roles.append(role)
+        # For now, we'll only create users if they already exist in our database
+        # or if they're coming through a specific teacher signup flow
+        print(f"User created in Clerk but not in our database: {email}")
+        print("This user will not be able to access the admin portal until they are added by an administrator")
         
-        db.commit()
-        
-        # Note: Teacher code assignment will be handled by the frontend
-        # after the user is created, using the useTeacherCode endpoint
+        # Note: We don't create the user here anymore to prevent unauthorized access
+        # Users must be created through the teacher signup flow or added by an administrator
         
     except Exception as e:
         # Log error but don't break the webhook

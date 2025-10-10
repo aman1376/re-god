@@ -14,7 +14,7 @@ router = APIRouter()
 @router.post("/favourites/{lesson_id}", response_model=dict)
 async def toggle_favorite(
     lesson_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Toggle favorite status for a lesson"""
@@ -27,14 +27,14 @@ async def toggle_favorite(
         )
     
     # Check if user has access to the course
-    from app.models import StudentTeacherAccess, Course
+    from app.models import TeacherAssignment, Course
     if current_user.has_role("student"):
         course = db.query(Course).filter(Course.id == lesson.course_id).first()
         if course:
-            has_access = db.query(StudentTeacherAccess).filter(
-                StudentTeacherAccess.student_id == current_user.id,
-                StudentTeacherAccess.teacher_id == course.created_by,
-                StudentTeacherAccess.is_active == True
+            has_access = db.query(TeacherAssignment).filter(
+                TeacherAssignment.student_id == current_user.id,
+                TeacherAssignment.teacher_id == course.created_by,
+                TeacherAssignment.active == True
             ).first()
             
             if not has_access:
@@ -67,7 +67,7 @@ async def toggle_favorite(
 
 @router.get("/favourites", response_model=List[FavoriteResponse])
 async def get_favorites(
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
     page: int = 1,
     limit: int = 20
@@ -99,7 +99,7 @@ async def get_favorites(
 @router.delete("/favourites/{favorite_id}")
 async def delete_favorite(
     favorite_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Delete a favorite by ID"""
@@ -137,16 +137,16 @@ async def toggle_chapter_favorite(
         )
     
     # Check if user has access to the course
-    from app.models import StudentTeacherAccess, Course
+    from app.models import TeacherAssignment, Course
     user_uuid = uuid.UUID(current_user["id"])
     
     if current_user.get("role") == "student":
         course = db.query(Course).filter(Course.id == chapter.course_id).first()
         if course:
-            has_access = db.query(StudentTeacherAccess).filter(
-                StudentTeacherAccess.student_id == user_uuid,
-                StudentTeacherAccess.teacher_id == course.created_by,
-                StudentTeacherAccess.is_active == True
+            has_access = db.query(TeacherAssignment).filter(
+                TeacherAssignment.student_id == user_uuid,
+                TeacherAssignment.teacher_id == course.created_by,
+                TeacherAssignment.active == True
             ).first()
             
             if not has_access:

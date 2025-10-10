@@ -8,6 +8,7 @@ interface SuccessModalProps {
   title?: string;
   subtitle?: string;
   buttonText?: string;
+  score?: number | null;
 }
 
 const { width, height } = Dimensions.get('window');
@@ -17,7 +18,8 @@ export default function SuccessModal({
   onContinue, 
   title = "Nice work!",
   subtitle = "You've unlocked the next lesson!",
-  buttonText = "Continue"
+  buttonText = "Continue",
+  score = null
 }: SuccessModalProps) {
   return (
     <Modal
@@ -39,6 +41,13 @@ export default function SuccessModal({
             
             {/* Subtitle */}
             <Text style={styles.subtitle}>{subtitle}</Text>
+            
+            {/* Score Display */}
+            {score !== null && (
+              <View style={styles.scoreContainer}>
+                <Text style={styles.scoreText}>Quiz Score: {score}%</Text>
+              </View>
+            )}
             
             {/* Continue Button */}
             <TouchableOpacity style={styles.continueButton} onPress={onContinue}>
@@ -86,8 +95,21 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: 'white',
     textAlign: 'center',
-    marginBottom: 30,
+    marginBottom: 20,
     lineHeight: 22,
+  },
+  scoreContainer: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+    marginBottom: 20,
+  },
+  scoreText: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: 'white',
+    textAlign: 'center',
   },
   continueButton: {
     backgroundColor: '#6B8E23', // Green color matching app theme

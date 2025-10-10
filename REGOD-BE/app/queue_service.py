@@ -3,7 +3,10 @@ import json
 import logging
 from typing import Dict, Any, Optional
 import asyncpg
-from .database import get_db_pool
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -17,11 +20,37 @@ class PGMQService:
 
     async def initialize(self):
         """Initialize PGMQ service with database connection"""
-        self.db_pool = get_db_pool()
-        logger.info("PGMQ Service initialized")
+        try:
+            # Create async database pool
+            database_url = os.getenv("DATABASE_URL")
+            if not database_url:
+                logger.error("DATABASE_URL not found in environment")
+                return
+            
+            # Ensure the URL is in the correct format for asyncpg
+            if database_url.startswith("postgresql://"):
+                db_url = database_url
+            else:
+                logger.error(f"Invalid database URL format: {database_url}")
+                return
+            
+            self.db_pool = await asyncpg.create_pool(
+                db_url,
+                min_size=2,
+                max_size=10,
+                command_timeout=60
+            )
+            logger.info("PGMQ Service initialized with database pool")
+        except Exception as e:
+            logger.error(f"Failed to initialize PGMQ service: {e}")
+            self.db_pool = None
 
     async def send_chat_notification(self, user_id: str, message_data: Dict[str, Any]):
         """Send a chat notification to PGMQ queue"""
+        if not self.db_pool:
+            logger.warning("PGMQ service not initialized, skipping notification")
+            return
+        
         try:
             async with self.db_pool.acquire() as conn:
                 # Send notification to chat_notifications queue
@@ -41,6 +70,10 @@ class PGMQService:
 
     async def send_message_delivery_notification(self, thread_id: int, message_id: str, recipient_id: str):
         """Send message delivery notification"""
+        if not self.db_pool:
+            logger.warning("PGMQ service not initialized, skipping delivery notification")
+            return
+        
         try:
             async with self.db_pool.acquire() as conn:
                 await conn.execute(
@@ -60,6 +93,9 @@ class PGMQService:
 
     async def process_chat_notifications(self):
         """Process chat notifications from the queue"""
+        if not self.db_pool:
+            return
+        
         try:
             async with self.db_pool.acquire() as conn:
                 # Read messages from chat_notifications queue
@@ -93,20 +129,74 @@ class PGMQService:
 
     async def _process_chat_notification(self, data: Dict[str, Any]):
         """Process individual chat notification"""
-        # This could trigger push notifications, email alerts, etc.
-        user_id = data['user_id']
-        message_data = data['data']
-        
-        logger.info(f"Processing chat notification for user {user_id}: {message_data}")
-        
-        # Here you could integrate with:
-        # - Push notification services (FCM, APNS)
-        # - Email services
-        # - SMS services
-        # - Other notification channels
+        try:
+            user_id = data['user_id']
+            message_data = data['data']
+            
+            logger.info(f"Processing chat notification for user {user_id}: {message_data}")
+            
+            # Get user's push tokens from database
+            async with self.db_pool.acquire() as conn:
+                user_tokens = await conn.fetch(
+                    "SELECT expo_push_token FROM users WHERE id = $1 AND expo_push_token IS NOT NULL",
+                    user_id
+                )
+                
+                if user_tokens:
+                    # Send push notification via Expo
+                    await self._send_expo_push_notification(
+                        user_tokens[0]['expo_push_token'],
+                        message_data
+                    )
+                else:
+                    logger.info(f"No push token found for user {user_id}")
+            
+        except Exception as e:
+            logger.error(f"Error processing chat notification: {e}")
+
+    async def _send_expo_push_notification(self, expo_push_token: str, message_data: Dict[str, Any]):
+        """Send push notification via Expo Push Service"""
+        try:
+            import requests
+            
+            payload = {
+                'to': expo_push_token,
+                'title': f"New message from {message_data.get('sender_name', 'Someone')}",
+                'body': message_data.get('content', 'You have a new message'),
+                'data': {
+                    'type': 'chat',
+                    'thread_id': message_data.get('thread_id'),
+                    'sender_name': message_data.get('sender_name'),
+                    'timestamp': message_data.get('timestamp')
+                },
+                'sound': 'default',
+                'badge': 1,
+                'channelId': 'chat-messages'
+            }
+            
+            response = requests.post(
+                'https://exp.host/--/api/v2/push/send',
+                headers={
+                    'Accept': 'application/json',
+                    'Accept-encoding': 'gzip, deflate',
+                    'Content-Type': 'application/json',
+                },
+                json=payload
+            )
+            
+            if response.status_code == 200:
+                logger.info(f"Push notification sent successfully to {expo_push_token}")
+            else:
+                logger.error(f"Failed to send push notification: {response.text}")
+                
+        except Exception as e:
+            logger.error(f"Error sending Expo push notification: {e}")
 
     async def process_message_delivery(self):
         """Process message delivery confirmations"""
+        if not self.db_pool:
+            return
+        
         try:
             async with self.db_pool.acquire() as conn:
                 messages = await conn.fetch(

@@ -4,13 +4,19 @@ import { useEffect, useState } from "react"
 import { Users, BookOpen, Monitor } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import AdminApiService, { type AdminStats } from "@/lib/api"
+import { useAuth } from "@/contexts/auth-context"
 
 export function AdminStats() {
+  const { user } = useAuth()
   const [stats, setStats] = useState<AdminStats | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState("")
 
+  // Check if user has admin permissions
+  const isAdmin = user?.roles?.includes('admin') || user?.role === 'admin'
+
   useEffect(() => {
+    console.log('AdminStats: Making API call for admin user')
     const fetchStats = async () => {
       try {
         setIsLoading(true)

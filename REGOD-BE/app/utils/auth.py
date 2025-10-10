@@ -50,6 +50,25 @@ def create_refresh_token(user_id: str) -> str:
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
+def decode_refresh_token(token: str) -> str:
+    """
+    Decode and verify a refresh token, returning the user_id
+    """
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        
+        if payload.get("type") != "refresh":
+            return None
+        
+        user_id = payload.get("user_id")
+        return user_id
+    except jwt.ExpiredSignatureError:
+        print("Refresh token has expired")
+        return None
+    except jwt.InvalidTokenError as e:
+        print(f"Invalid refresh token: {e}")
+        return None
+
 def verify_token(token: str) -> Dict[str, Any]:
     """
     Verify and decode a JWT token
@@ -82,6 +101,9 @@ async def get_current_user(
     try:
         token = credentials.credentials
         logger.info(f"Received token (first 50 chars): {token[:50]}...")
+        logger.info(f"Token length: {len(token)}")
+        logger.info(f"Token type: {type(token)}")
+        logger.info(f"Token is empty: {not token}")
         
         user = None
         user_id = None
@@ -90,49 +112,55 @@ async def get_current_user(
         email_verified = False
         payload = None
         
-        # Try regular JWT verification first (for mobile app and admin portal)
+        # Try Clerk JWT verification first (for admin portal)
         try:
-            payload = verify_token(token)
-            logger.info(f"Successfully verified regular JWT with payload: {payload}")
-            
-            user_id = payload.get("sub") or payload.get("user_id")
-            email = payload.get("email", "")
-            name = payload.get("name", "User")
-            email_verified = payload.get("email_verified", False)
-            
-        except HTTPException as jwt_error:
-            logger.info(f"Regular JWT verification failed: {jwt_error.detail}, trying Clerk JWT...")
-            
-            # Fallback to Clerk JWT verification (for legacy compatibility)
-            try:
-                # Helpers to sanitize Clerk template artifacts and booleans
-                def _is_templated(value: Any) -> bool:
-                    try:
-                        return isinstance(value, str) and ("{{" in value or "}}" in value)
-                    except Exception:
-                        return False
+            # Helpers to sanitize Clerk template artifacts and booleans
+            def _is_templated(value: Any) -> bool:
+                try:
+                    return isinstance(value, str) and ("{{" in value or "}}" in value)
+                except Exception:
+                    return False
 
-                def _to_bool(value: Any, default: bool = False) -> bool:
-                    if isinstance(value, bool):
-                        return value
-                    if isinstance(value, str):
-                        v = value.strip().lower().strip('"')
-                        if v in ("true", "1", "yes"): return True
-                        if v in ("false", "0", "no"): return False
-                    return default
-                
+            def _to_bool(value: Any, default: bool = False) -> bool:
+                if isinstance(value, bool):
+                    return value
+                if isinstance(value, str):
+                    v = value.strip().lower().strip('"')
+                    if v in ("true", "1", "yes"): return True
+                    if v in ("false", "0", "no"): return False
+                return default
+            
+            # Check if token looks like a JWT (has 3 parts separated by dots)
+            if token.count('.') == 2:
+                logger.info("Token appears to be a JWT, attempting Clerk JWT verification...")
                 payload = verify_clerk_jwt(token)
                 logger.info(f"Successfully verified Clerk JWT token with payload: {payload}")
+            else:
+                logger.info("Token does not appear to be a JWT, skipping Clerk JWT verification...")
+                raise HTTPException(status_code=401, detail="Not a JWT token")
+            
+            # Extract user information from Clerk JWT
+            user_id = payload.get("sub") or payload.get("user_id")
+            raw_email = payload.get("email") or payload.get("email_address") or payload.get("primary_email_address", {}).get("email_address", "")
+            email = None if _is_templated(raw_email) else raw_email
+            name = payload.get("name") or payload.get("full_name") or payload.get("given_name") or payload.get("first_name") or "User"
+            email_verified = _to_bool(payload.get("email_verified")) or _to_bool(payload.get("email_address_verified"))
+            
+        except HTTPException as clerk_error:
+            logger.info(f"Clerk JWT verification failed: {clerk_error.detail}, trying regular JWT...")
+            
+            # Fallback to regular JWT verification (for mobile app)
+            try:
+                payload = verify_token(token)
+                logger.info(f"Successfully verified regular JWT with payload: {payload}")
                 
-                # Extract user information from Clerk JWT
                 user_id = payload.get("sub") or payload.get("user_id")
-                raw_email = payload.get("email") or payload.get("email_address") or payload.get("primary_email_address", {}).get("email_address", "")
-                email = None if _is_templated(raw_email) else raw_email
-                name = payload.get("name") or payload.get("full_name") or payload.get("given_name") or payload.get("first_name") or "User"
-                email_verified = _to_bool(payload.get("email_verified")) or _to_bool(payload.get("email_address_verified"))
+                email = payload.get("email", "")
+                name = payload.get("name", "User")
+                email_verified = payload.get("email_verified", False)
                 
-            except HTTPException as clerk_error:
-                logger.info(f"Clerk JWT verification also failed: {clerk_error.detail}, trying Clerk session...")
+            except HTTPException as jwt_error:
+                logger.info(f"Regular JWT verification also failed: {jwt_error.detail}, trying Clerk session...")
                 
                 # Final fallback to Clerk session token verification
                 try:
@@ -195,17 +223,38 @@ async def get_current_user(
             logger.info(f"Created new user with database ID: {user.id}")
         else:
             # Update existing user info safely (avoid templated artifacts)
+            # Only update if the new data is better than what we have
             changed = False
+            
+            # Update email if it's different and not empty
             if email and user.email != email:
                 user.email = email
                 changed = True
-            if name and user.name != name:
-                user.name = name
-                changed = True
+            
+            # Only update name if:
+            # 1. Current name is generic/placeholder ("User", "Development User", etc.)
+            # 2. New name is more specific (not "User")
+            # 3. Current name is empty
+            generic_names = ["User", "Development User", ""]
+            if name and name not in generic_names:
+                if user.name in generic_names or not user.name:
+                    logger.info(f"Updating user name from '{user.name}' to '{name}'")
+                    user.name = name
+                    changed = True
+                elif user.name != name:
+                    # If both names are specific (not generic), keep the existing one
+                    logger.info(f"Keeping existing user name '{user.name}' instead of '{name}'")
+            
+            # Only update is_verified to True (never downgrade to False)
+            # This prevents Clerk from overwriting verified status
             parsed_verified = bool(email_verified)
-            if user.is_verified != parsed_verified:
+            if parsed_verified and not user.is_verified:
+                logger.info(f"Updating user verification status to True")
                 user.is_verified = parsed_verified
                 changed = True
+            elif not parsed_verified and user.is_verified:
+                logger.info(f"Keeping user verified status (not downgrading from True to False)")
+            
             if changed:
                 db.commit()
         
@@ -229,7 +278,9 @@ async def get_current_user(
             "role": role,
             "verified": user.is_verified,
             "clerk_user_id": user.clerk_user_id,  # Store Clerk ID for reference
-            "avatar_url": user.avatar_url  # Include avatar URL from database
+            "avatar_url": user.avatar_url,  # Include avatar URL from database
+            "roles": roles,  # Include all roles for permission checking
+            "permissions": [perm.name for role in user.roles for perm in role.permissions]  # Include all permissions
         }
         
     except HTTPException:
@@ -241,3 +292,62 @@ async def get_current_user(
             status_code=500,
             detail={"error": {"code": "INTERNAL_ERROR", "message": "Internal server error"}},
         )
+
+
+def user_has_permission(user_dict: dict, permission_name: str) -> bool:
+    """
+    Check if a user (in dict format) has a specific permission.
+    
+    Args:
+        user_dict: User dictionary from get_current_user
+        permission_name: Permission to check for
+        
+    Returns:
+        bool: True if user has permission, False otherwise
+    """
+    if not user_dict or not isinstance(user_dict, dict):
+        return False
+    
+    permissions = user_dict.get("permissions", [])
+    
+    # Check if user has the specific permission
+    has_specific = permission_name in permissions
+    
+    # Check if user has admin:all permission (grants all permissions)
+    has_admin_all = "admin:all" in permissions
+    
+    return has_specific or has_admin_all
+
+
+def user_has_role(user_dict: dict, role_name: str) -> bool:
+    """
+    Check if a user (in dict format) has a specific role.
+    
+    Args:
+        user_dict: User dictionary from get_current_user
+        role_name: Role to check for
+        
+    Returns:
+        bool: True if user has role, False otherwise
+    """
+    if not user_dict or not isinstance(user_dict, dict):
+        return False
+    
+    roles = user_dict.get("roles", [])
+    return role_name in roles
+
+
+def get_user_permissions(user_dict: dict) -> list[str]:
+    """
+    Get all permissions for a user (in dict format).
+    
+    Args:
+        user_dict: User dictionary from get_current_user
+        
+    Returns:
+        list[str]: List of permission names
+    """
+    if not user_dict or not isinstance(user_dict, dict):
+        return []
+    
+    return user_dict.get("permissions", [])

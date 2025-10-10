@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, HTTPException, status
+from fastapi import APIRouter, Request, HTTPException, status, Depends
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import User
@@ -48,15 +48,16 @@ async def clerk_webhook(request: Request, db: Session = Depends(get_db)):
         if email:
             user = db.query(User).filter(User.email == email).first()
             if not user:
-                user = User(
-                    email=email,
-                    name=f"{data.get('first_name', '')} {data.get('last_name', '')}".strip() or "User",
-                    clerk_user_id=data.get("id"),
-                    is_verified=True,
-                )
-                db.add(user)
-                db.commit()
-                db.refresh(user)
+                # Don't create new users automatically - they must be added by an administrator
+                # or created through the teacher signup flow
+                print(f"User created in Clerk but not in our database: {email}")
+                print("This user will not be able to access the admin portal until they are added by an administrator")
+                return {"status": "success", "message": "User not created - requires administrator approval"}
+            else:
+                # Update existing user's Clerk ID if missing
+                if not user.clerk_user_id:
+                    user.clerk_user_id = data.get("id")
+                    db.commit()
 
     elif event_type == "user.updated":
         user = db.query(User).filter(User.clerk_user_id == data.get("id")).first()

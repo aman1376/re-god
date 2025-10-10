@@ -24,7 +24,7 @@ export function TeacherInviteForm({ onInviteSuccess }: TeacherInviteFormProps) {
   const [formData, setFormData] = useState({
     name: "",
     email: "",
-    max_uses: 1,
+    max_uses: -1,
     expires_in_days: 30,
   })
 
@@ -46,7 +46,7 @@ export function TeacherInviteForm({ onInviteSuccess }: TeacherInviteFormProps) {
       setFormData({
         name: "",
         email: "",
-        max_uses: 1,
+        max_uses: -1,
         expires_in_days: 30,
       })
     } catch (err) {
@@ -85,7 +85,7 @@ export function TeacherInviteForm({ onInviteSuccess }: TeacherInviteFormProps) {
         <DialogHeader>
           <DialogTitle>Invite New Teacher</DialogTitle>
           <DialogDescription>
-            Send an invitation to a teacher with a unique signup code
+            Clerk will automatically send an email invitation with a unique teacher code and signup link
           </DialogDescription>
         </DialogHeader>
 
@@ -101,21 +101,31 @@ export function TeacherInviteForm({ onInviteSuccess }: TeacherInviteFormProps) {
             </div>
 
             <div className="space-y-2">
-              <Label>Invitation Link</Label>
+              <Label>Email Sent via Clerk</Label>
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                <p className="text-blue-800 text-sm">
+                  <strong>✅ Email invitation sent!</strong> Clerk has automatically sent an invitation email to <strong>{success.teacher_email}</strong> with the teacher signup link and code.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Manual Invitation Link (if needed)</Label>
               <div className="flex gap-2">
                 <Input
-                  value={success.invitation_link}
+                  value={`${success.invitation_link}?teacher_code=${success.teacher_code}`}
                   readOnly
                   className="flex-1"
                 />
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => copyToClipboard(success.invitation_link)}
+                  onClick={() => copyToClipboard(`${success.invitation_link}?teacher_code=${success.teacher_code}`)}
                 >
                   {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                 </Button>
               </div>
+              <p className="text-xs text-gray-500">Use this link if you need to manually share the invitation</p>
             </div>
 
             <div className="space-y-2">
@@ -171,19 +181,25 @@ export function TeacherInviteForm({ onInviteSuccess }: TeacherInviteFormProps) {
                 placeholder="teacher@example.com"
                 required
               />
+              <p className="text-xs text-blue-600">
+                Clerk will automatically send an invitation email to this address
+              </p>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
+              {/* <div className="space-y-2">
                 <Label htmlFor="max_uses">Max Uses</Label>
                 <Input
                   id="max_uses"
                   type="number"
-                  min="1"
+                  min="-1"
                   value={formData.max_uses}
                   onChange={(e) => setFormData({ ...formData, max_uses: parseInt(e.target.value) })}
                 />
-              </div>
+                <p className="text-xs text-gray-500">
+                  Use -1 for unlimited uses
+                </p>
+              </div> */}
               <div className="space-y-2">
                 <Label htmlFor="expires_in_days">Expires (days)</Label>
                 <Input

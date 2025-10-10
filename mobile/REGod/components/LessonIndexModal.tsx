@@ -15,6 +15,7 @@ interface LessonIndexModalProps {
   progressPercentage: number;
   chapterTitle?: string;
   showChapterProgress?: boolean; // New prop to control chapter progress section visibility
+  isTeacherOrAdmin?: boolean; // New prop to check if user is teacher or admin
   detailedProgress?: {
     course_progress: {
       total_modules: number;
@@ -42,6 +43,7 @@ export default function LessonIndexModal({
   progressPercentage,
   chapterTitle,
   showChapterProgress = true,
+  isTeacherOrAdmin = false,
   detailedProgress
 }: LessonIndexModalProps) {
   return (
@@ -106,7 +108,8 @@ export default function LessonIndexModal({
             <Text style={styles.sectionTitle}>Lessons</Text>
             {modules.map((module, index) => {
               const isCompleted = completedLessons.has(module.id);
-              const isLocked = index > 0 && !completedLessons.has(modules[index - 1]?.id);
+              // For teachers/admins, no lessons should be locked
+              const isLocked = !isTeacherOrAdmin && index > 0 && !completedLessons.has(modules[index - 1]?.id);
 
               return (
                 <TouchableOpacity

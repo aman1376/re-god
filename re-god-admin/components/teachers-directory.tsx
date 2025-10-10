@@ -6,11 +6,16 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { TeacherInviteForm } from "./teacher-invite-form"
 import AdminApiService, { type Teacher } from "@/lib/api"
+import { useAuth } from "@/contexts/auth-context"
 
 export function TeachersDirectory() {
+  const { user } = useAuth()
   const [teachers, setTeachers] = useState<Teacher[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState("")
+
+  // Check if user has admin permissions
+  const isAdmin = user?.roles?.includes('admin') || user?.role === 'admin'
 
   const fetchTeachers = async () => {
     try {
@@ -26,6 +31,7 @@ export function TeachersDirectory() {
   }
 
   useEffect(() => {
+    console.log('TeachersDirectory: Making API call for admin user')
     fetchTeachers()
   }, [])
 

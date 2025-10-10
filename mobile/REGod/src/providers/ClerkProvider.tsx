@@ -14,7 +14,23 @@ export const ClerkProvider: React.FC<ClerkProviderProps> = ({ children }) => {
   return (
     <ClerkProviderBase
       publishableKey={CONFIG.CLERK_PUBLISHABLE_KEY}
-      // Add any additional Clerk configuration here
+      afterSignInUrl="/"
+      afterSignUpUrl="/"
+      signInUrl="/auth"
+      signUpUrl="/auth"
+      telemetry={{
+        disabled: true,
+      }}
+      appearance={{
+        elements: {
+          formButtonPrimary: {
+            backgroundColor: '#007AFF',
+            '&:hover': {
+              backgroundColor: '#0056CC',
+            },
+          },
+        },
+      }}
     >
       {children}
     </ClerkProviderBase>
