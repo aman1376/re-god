@@ -989,6 +989,14 @@ class ApiService {
     });
   }
 
+  // Time Tracking Methods
+  static async updateTimeTracking(date: string, hours: number) {
+    return this.makeAuthenticatedRequest('/user/time-tracking', {
+      method: 'POST',
+      body: JSON.stringify({ date, hours }),
+    });
+  }
+
   static async uploadProfilePicture(imageUri: string): Promise<{ path: string; public_url: string }> {
     // Use Supabase storage if configured
     const SupabaseStorage = await import('./supabaseStorage').then(m => m.default);

@@ -910,20 +910,33 @@ async def get_student_analytics(
     else:
         avg_time_per_day = 0
     
-    # Get time spent data for chart (last 30 days)
+    # Get time spent data from user's weekly_time_data
     from datetime import datetime, timedelta, timezone as tz
     time_series = []
-    now = datetime.now(tz.utc)
     
-    for i in range(9):  # Last 9 data points
-        date = now - timedelta(days=(8 - i) * 3)
-        # Simulate activity data (random for now, would need real tracking)
-        import random
-        hours = random.uniform(20, 110) if course_progress else 0
-        time_series.append({
-            "date": date.strftime("%d/%m"),
-            "hours": round(hours, 1)
-        })
+    # Get weekly time data from user
+    weekly_data = student.weekly_time_data or []
+    
+    if weekly_data:
+        # Use actual tracked data (sorted by date, newest first)
+        for entry in reversed(weekly_data):  # Reverse to show oldest to newest
+            try:
+                date_obj = datetime.strptime(entry["date"], "%Y-%m-%d")
+                time_series.append({
+                    "date": date_obj.strftime("%d/%m"),
+                    "hours": round(entry.get("hours", 0), 1)
+                })
+            except (ValueError, KeyError):
+                continue
+    else:
+        # If no data yet, show empty data for last 7 days
+        now = datetime.now(tz.utc)
+        for i in range(7):
+            date = now - timedelta(days=(6 - i))
+            time_series.append({
+                "date": date.strftime("%d/%m"),
+                "hours": 0
+            })
     
     return {
         "student": {

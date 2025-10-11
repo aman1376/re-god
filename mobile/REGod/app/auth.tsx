@@ -30,7 +30,6 @@ import Logo from '../assets/images/logo.png';
 import ApiService from '../src/services/api';
 import GoogleLogo from '../components/GoogleLogo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import VideoCacheService from '../src/services/videoCache';
 
 const { width, height } = Dimensions.get('window');
 
@@ -55,11 +54,6 @@ export default function AuthScreen() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showTeacherCodeInput, setShowTeacherCodeInput] = useState(false);
   const [teacherCodeUserEmail, setTeacherCodeUserEmail] = useState('');
-  
-  // Video caching states
-  const [videoSource, setVideoSource] = useState<VideoSource | null>(null);
-  const [videoLoading, setVideoLoading] = useState(true);
-  const [videoDownloadProgress, setVideoDownloadProgress] = useState(0);
 
   const { login, register, error, clearError, isAuthenticated, socialLogin } = useAuth();
   const signUpCtx = useSignUp();
@@ -74,37 +68,12 @@ export default function AuthScreen() {
   // SSO hooks for social login
   const { startSSOFlow } = useSSO();
 
-  // Initialize video player with cached video or fallback to bundled video
-  const player = useVideoPlayer(videoSource || require('@/assets/videos/Re-God video h264.mov'), (player) => {
+  // Initialize video player with bundled video
+  const player = useVideoPlayer(require('@/assets/videos/compressed_output.mov'), (player) => {
     player.loop = true;
     player.muted = false;
     player.volume = 1;
   });
-
-  // Load cached video on mount
-  useEffect(() => {
-    const loadVideo = async () => {
-      try {
-        setVideoLoading(true);
-        console.log('[Auth] Loading cached video...');
-        
-        const videoUri = await VideoCacheService.getCachedVideoUri((progress) => {
-          setVideoDownloadProgress(progress);
-        });
-        
-        console.log('[Auth] Video loaded:', videoUri);
-        setVideoSource({ uri: videoUri });
-        setVideoLoading(false);
-      } catch (error) {
-        console.error('[Auth] Failed to load video:', error);
-        console.log('[Auth] Using bundled video as fallback');
-        setVideoLoading(false);
-        // Continue with bundled video - no need to show error to user
-      }
-    };
-
-    loadVideo();
-  }, []);
 
   // Check if AuthContext user needs teacher code
   useEffect(() => {
@@ -115,58 +84,58 @@ export default function AuthScreen() {
     }
   }, [authContextUser]);
 
-  // Video player setup (only runs when videoSource is available or after video loads)
+  // Video player setup
   useEffect(() => {
-    if (!player || videoLoading) return;
+    if (!player) return;
 
     let timer: any;
-      const statusListener = player.addListener('statusChange', (status) => {
-        if (!hasFaded) {
-          setHasFaded(true);
-          Animated.timing(fadeAnim, {
-            toValue: 0,
-            duration: 600,
-            easing: Easing.out(Easing.cubic),
-            useNativeDriver: true,
-          }).start();
-        }
-      });
+    const statusListener = player.addListener('statusChange', (status) => {
+      if (!hasFaded) {
+        setHasFaded(true);
+        Animated.timing(fadeAnim, {
+          toValue: 0,
+          duration: 600,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }).start();
+      }
+    });
 
-      setAudioModeAsync({
-        allowsRecording: false,
-        shouldPlayInBackground: false,
-        playsInSilentMode: true,
-        interruptionMode: 'doNotMix',
-        interruptionModeAndroid: 'doNotMix',
-        shouldRouteThroughEarpiece: false,
-      }).catch(() => {});
+    setAudioModeAsync({
+      allowsRecording: false,
+      shouldPlayInBackground: false,
+      playsInSilentMode: true,
+      interruptionMode: 'doNotMix',
+      interruptionModeAndroid: 'doNotMix',
+      shouldRouteThroughEarpiece: false,
+    }).catch(() => {});
 
-      timer = setTimeout(() => {
-        try {
-          player.play();
-        } catch (error) {
-          console.log('Error playing video:', error);
-        }
-        if (!hasFaded) {
-          setTimeout(() => {
-            if (!hasFaded) {
-              setHasFaded(true);
-              Animated.timing(fadeAnim, {
-                toValue: 0,
-                duration: 600,
-                easing: Easing.out(Easing.cubic),
-                useNativeDriver: true,
-              }).start();
-            }
-          }, 700);
-        }
-      }, 400);
+    timer = setTimeout(() => {
+      try {
+        player.play();
+      } catch (error) {
+        console.log('Error playing video:', error);
+      }
+      if (!hasFaded) {
+        setTimeout(() => {
+          if (!hasFaded) {
+            setHasFaded(true);
+            Animated.timing(fadeAnim, {
+              toValue: 0,
+              duration: 600,
+              easing: Easing.out(Easing.cubic),
+              useNativeDriver: true,
+            }).start();
+          }
+        }, 700);
+      }
+    }, 400);
 
-      return () => {
-        statusListener?.remove();
-        if (timer) clearTimeout(timer);
-      };
-  }, [player, videoLoading]);
+    return () => {
+      statusListener?.remove();
+      if (timer) clearTimeout(timer);
+    };
+  }, [player]);
 
   // Note: Navigation is handled by the main index.tsx file
 
@@ -564,27 +533,16 @@ export default function AuthScreen() {
       {/* Fallback background */}
       <View style={styles.fallbackBackground} />
       
-      {/* Video background with loading state */}
-      {videoLoading ? (
-        <View style={styles.videoLoadingContainer}>
-          <ActivityIndicator size="large" color="#B4B454" />
-          <Text style={styles.videoLoadingText}>
-            {videoDownloadProgress > 0 
-              ? `Loading video... ${Math.round(videoDownloadProgress * 100)}%`
-              : 'Preparing video...'}
-          </Text>
-        </View>
-      ) : (
-        <VideoView
-          player={player}
-          style={styles.videoBackground}
-          allowsFullscreen={false}
-          allowsPictureInPicture={false}
-          contentFit="cover"
-          nativeControls={false}
-          showsTimecodes={false}
-        />
-      )}
+      {/* Video background */}
+      <VideoView
+        player={player}
+        style={styles.videoBackground}
+        allowsFullscreen={false}
+        allowsPictureInPicture={false}
+        contentFit="cover"
+        nativeControls={false}
+        showsTimecodes={false}
+      />
       
       <View style={styles.overlay} />
       <Animated.View style={[styles.fadeOverlay, { opacity: fadeAnim }]} />
@@ -1024,22 +982,7 @@ const styles = StyleSheet.create({
     width: width,
     height: height,
     zIndex: 1,
-  },
-  videoLoadingContainer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    width: width,
-    height: height,
-    zIndex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#000000',
-  },
-  videoLoadingText: {
-    marginTop: 16,
-    color: '#B4B454',
-    fontSize: 16,
+    transform: [{ scale: 1.2 }],
   },
   overlay: {
     position: 'absolute',

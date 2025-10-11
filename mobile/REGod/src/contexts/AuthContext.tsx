@@ -7,6 +7,7 @@ import * as Crypto from 'expo-crypto';
 import { router } from 'expo-router';
 import ApiService, { type User, type AuthResponse } from '../services/api';
 import { NotificationService } from '../services/notificationService';
+import TimeTrackingService from '../services/timeTrackingService';
 
 // Configure WebBrowser for OAuth
 WebBrowser.maybeCompleteAuthSession();
@@ -93,17 +94,22 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   };
 
   useEffect(() => {
-    // Initialize notifications
-    const initializeNotifications = async () => {
+    // Initialize notifications and time tracking
+    const initializeServices = async () => {
       try {
+        // Initialize notifications
         await NotificationService.initialize();
         console.log('Notifications initialized successfully');
+        
+        // Initialize time tracking service
+        await TimeTrackingService.initialize();
+        console.log('Time tracking initialized successfully');
       } catch (error) {
-        console.error('Failed to initialize notifications:', error);
+        console.error('Failed to initialize services:', error);
       }
     };
 
-    initializeNotifications();
+    initializeServices();
 
     // Set up periodic token refresh check (every 5 minutes)
     const tokenRefreshInterval = setInterval(async () => {

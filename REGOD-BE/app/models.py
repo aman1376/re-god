@@ -49,6 +49,8 @@ class User(Base):
     is_verified = Column(Boolean, default=False)
     onboarding_completed = Column(Boolean, default=False)
     expo_push_token = Column(String, nullable=True)
+    # Time tracking - stores last 7 days of learning time
+    weekly_time_data = Column(JSONB, nullable=True, default=list)
     # Church-related fields
     church_admin_name = Column(String, nullable=True)
     home_church = Column(String, nullable=True)

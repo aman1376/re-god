@@ -248,6 +248,74 @@ async def delete_note(
     
     return {"message": "Note deleted successfully"}
 
+@router.post("/time-tracking")
+async def update_time_tracking(
+    time_data: dict,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Update user's time tracking data.
+    Expects: {"date": "2025-10-11", "hours": 2.5}
+    Maintains a rolling 7-day window of time tracking data.
+    """
+    from datetime import datetime, timedelta
+    
+    user_id = uuid.UUID(current_user["id"])
+    user = db.query(User).filter(User.id == user_id).first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Validate input
+    if "date" not in time_data or "hours" not in time_data:
+        raise HTTPException(status_code=400, detail="Missing required fields: date and hours")
+    
+    try:
+        date_str = time_data["date"]
+        hours = float(time_data["hours"])
+        
+        # Validate date format
+        datetime.strptime(date_str, "%Y-%m-%d")
+        
+        # Get existing weekly time data or initialize empty list
+        weekly_data = user.weekly_time_data or []
+        
+        # Find if entry for this date already exists
+        existing_entry_index = None
+        for i, entry in enumerate(weekly_data):
+            if entry.get("date") == date_str:
+                existing_entry_index = i
+                break
+        
+        # Update or add new entry
+        if existing_entry_index is not None:
+            # Update existing entry
+            weekly_data[existing_entry_index]["hours"] = hours
+        else:
+            # Add new entry
+            weekly_data.append({"date": date_str, "hours": round(hours, 2)})
+        
+        # Sort by date (newest first) and keep only last 7 days
+        weekly_data.sort(key=lambda x: x["date"], reverse=True)
+        weekly_data = weekly_data[:7]
+        
+        # Update user's weekly time data
+        user.weekly_time_data = weekly_data
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": "Time tracking data updated successfully",
+            "weekly_data": weekly_data
+        }
+    
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid date format or hours value: {str(e)}")
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update time tracking: {str(e)}")
+
 @router.delete("/account")
 async def delete_account(
     current_user: dict = Depends(get_current_user),

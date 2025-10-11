@@ -63,7 +63,8 @@ export function StudentAnalytics({ studentId }: StudentAnalyticsProps) {
     )
   }
 
-  const maxHours = Math.max(...analytics.time_series.map(d => d.hours), 120)
+  // Calculate max hours for chart scaling (minimum of 5 hours for better visualization)
+  const maxHours = Math.max(...analytics.time_series.map(d => d.hours), 5)
 
   return (
     <div className="p-6 space-y-6">
@@ -86,14 +87,14 @@ export function StudentAnalytics({ studentId }: StudentAnalyticsProps) {
                     <div key={index} className="flex flex-col items-center flex-1">
                       <div className="w-full flex items-end justify-center px-1">
                         <div
-                          className="rounded-t-lg transition-all duration-300 hover:opacity-80"
+                          className="rounded-t-lg transition-all duration-300 hover:opacity-80 group relative"
                           style={{
                             backgroundColor: '#8B0000',
-                            height: `${(data.hours / maxHours) * 200}px`,
+                            height: `${data.hours > 0 ? Math.max((data.hours / maxHours) * 200, 4) : 4}px`,
                             width: '100%',
                             maxWidth: '40px',
-                            minHeight: '20px'
                           }}
+                          title={`${data.hours} hours`}
                         />
                       </div>
                       <div className="text-xs text-gray-600 mt-2">{data.date}</div>

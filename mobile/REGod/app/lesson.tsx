@@ -1,15 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, StatusBar} from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, ActivityIndicator, Alert, Modal, TextInput, StatusBar, AppState } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import MusicCard from '@/components/MusicCard';
 import SuccessModal from '@/components/SuccessModal';
 import ApiService, { type Module } from '../src/services/api';
 import { useAuth } from '../src/contexts/AuthContext';
 import { getImageUrl } from '../src/config/constants';
 import * as WebBrowser from 'expo-web-browser';
+import TimeTrackingService from '../src/services/timeTrackingService';
 
 // Types for quiz and reflection functionality
 interface QuizQuestion {
@@ -252,6 +254,40 @@ export default function LessonScreen() {
       loadModule();
     }
   }, [moduleId, isAuthenticated, authLoading]);
+
+  // Time tracking: Start when screen is focused, stop when unfocused
+  useFocusEffect(
+    React.useCallback(() => {
+      // Start tracking when screen comes into focus
+      TimeTrackingService.startTracking();
+      console.log('[LESSON] Started time tracking');
+
+      return () => {
+        // Stop tracking when screen loses focus
+        TimeTrackingService.stopTracking();
+        console.log('[LESSON] Stopped time tracking');
+      };
+    }, [])
+  );
+
+  // Also track app state changes (background/foreground)
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (nextAppState === 'background' || nextAppState === 'inactive') {
+        // App going to background, stop tracking
+        TimeTrackingService.stopTracking();
+        console.log('[LESSON] App backgrounded, stopped tracking');
+      } else if (nextAppState === 'active') {
+        // App coming to foreground, start tracking
+        TimeTrackingService.startTracking();
+        console.log('[LESSON] App foregrounded, started tracking');
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
 
   const loadModule = async () => {
     try {
