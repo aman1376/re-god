@@ -91,6 +91,17 @@ export interface AuthResponse {
   message?: string;
 }
 
+// Pagination types
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  items_per_page: number;
+  total_pages: number;
+  has_next: boolean;
+  has_prev: boolean;
+}
+
 interface User {
   id: string;
   email: string;
@@ -200,6 +211,10 @@ interface ChatResponse {
 class ApiService {
   private static clerkExchangeInProgress: boolean = false;
   
+  // Request cache to prevent duplicate API calls within short time windows
+  private static requestCache = new Map<string, { data: any; timestamp: number; promise?: Promise<any> }>();
+  private static readonly CACHE_TTL_MS = 2000; // Cache for 2 seconds
+  
   static async base(): Promise<string> {
     const baseUrl = await ApiBaseUrlResolver.ensure();
     console.log('[API] Using base URL:', baseUrl);
@@ -210,7 +225,40 @@ class ApiService {
   static async clearCache(): Promise<void> {
     await AsyncStorage.removeItem('regod_api_base_url');
     ApiBaseUrlResolver['baseUrl'] = null;
+    this.requestCache.clear(); // Also clear request cache
     console.log('[API] Cache cleared, will re-detect URL on next request');
+  }
+  
+  // Get cached request or return null if expired/not found
+  private static getCachedRequest<T>(cacheKey: string): T | null {
+    const cached = this.requestCache.get(cacheKey);
+    if (!cached) return null;
+    
+    const now = Date.now();
+    if (now - cached.timestamp > this.CACHE_TTL_MS) {
+      // Cache expired, remove it
+      this.requestCache.delete(cacheKey);
+      return null;
+    }
+    
+    console.log(`[API Cache] Using cached response for: ${cacheKey}`);
+    return cached.data as T;
+  }
+  
+  // Store request in cache
+  private static setCachedRequest(cacheKey: string, data: any): void {
+    this.requestCache.set(cacheKey, {
+      data,
+      timestamp: Date.now()
+    });
+    
+    // Cleanup old cache entries (keep only last 50)
+    if (this.requestCache.size > 50) {
+      const entriesToDelete = Array.from(this.requestCache.entries())
+        .sort((a, b) => a[1].timestamp - b[1].timestamp)
+        .slice(0, this.requestCache.size - 50);
+      entriesToDelete.forEach(([key]) => this.requestCache.delete(key));
+    }
   }
   private static async getAuthHeaders(): Promise<Record<string, string>> {
     // Try access token first, fallback to Clerk session token
@@ -235,6 +283,18 @@ class ApiService {
     options: RequestInit = {},
     retryCount = 0
   ): Promise<T> {
+    // Only cache GET requests
+    const isGetRequest = !options.method || options.method.toUpperCase() === 'GET';
+    const cacheKey = isGetRequest ? `${options.method || 'GET'}:${url}` : '';
+    
+    // Check cache for GET requests
+    if (isGetRequest) {
+      const cached = this.getCachedRequest<T>(cacheKey);
+      if (cached !== null) {
+        return cached;
+      }
+    }
+    
     try {
       const headers = await this.getAuthHeaders();
       const response = await fetch(`${await this.base()}${url}`, {
@@ -309,6 +369,11 @@ class ApiService {
         
         const errorMessage = data.error?.message || data.detail || data.message || `Request failed with status ${response.status}`;
         throw new Error(errorMessage);
+      }
+
+      // Cache successful GET requests
+      if (isGetRequest && cacheKey) {
+        this.setCachedRequest(cacheKey, data);
       }
 
       return data;
@@ -636,12 +701,24 @@ class ApiService {
   }
 
   // Course endpoints
-  static async getCourses(): Promise<Course[]> {
-    return this.makeAuthenticatedRequest<Course[]>('/courses');
+  static async getCourses(page: number = 1, itemsPerPage: number = 50): Promise<PaginatedResponse<Course>> {
+    return this.makeAuthenticatedRequest<PaginatedResponse<Course>>(`/courses?page=${page}&items_per_page=${itemsPerPage}`);
   }
 
-  static async getCourseModules(courseId: number): Promise<Module[]> {
-    return this.makeAuthenticatedRequest<Module[]>(`/courses/${courseId}/modules`);
+  // Backward compatible method - fetches all courses (for existing code)
+  static async getAllCourses(): Promise<Course[]> {
+    const response = await this.getCourses(1, 100);  // Get first 100 courses
+    return response.items;
+  }
+
+  static async getCourseModules(courseId: number, page: number = 1, itemsPerPage: number = 50): Promise<PaginatedResponse<Module>> {
+    return this.makeAuthenticatedRequest<PaginatedResponse<Module>>(`/courses/${courseId}/modules?page=${page}&items_per_page=${itemsPerPage}`);
+  }
+
+  // Backward compatible method - fetches all modules (for existing code)
+  static async getAllCourseModules(courseId: number): Promise<Module[]> {
+    const response = await this.getCourseModules(courseId, 1, 100);  // Get first 100 modules
+    return response.items;
   }
 
   static async updateModule(courseId: number, moduleId: number, moduleData: Partial<Module>): Promise<Module> {
@@ -657,8 +734,14 @@ class ApiService {
     });
   }
 
-  static async getCourseChapters(courseId: number): Promise<Chapter[]> {
-    return this.makeAuthenticatedRequest<Chapter[]>(`/courses/${courseId}/chapters`);
+  static async getCourseChapters(courseId: number, page: number = 1, itemsPerPage: number = 50): Promise<PaginatedResponse<Chapter>> {
+    return this.makeAuthenticatedRequest<PaginatedResponse<Chapter>>(`/courses/${courseId}/chapters?page=${page}&items_per_page=${itemsPerPage}`);
+  }
+
+  // Backward compatible method - fetches all chapters (for existing code)
+  static async getAllCourseChapters(courseId: number): Promise<Chapter[]> {
+    const response = await this.getCourseChapters(courseId, 1, 100);
+    return response.items;
   }
 
   static async getChapterProgress(courseId: number): Promise<{
@@ -800,13 +883,12 @@ class ApiService {
   }
 
   // Notes endpoints
-  static async getNotes(): Promise<Note[]> {
+  static async getNotes(page: number = 1, itemsPerPage: number = 50): Promise<PaginatedResponse<Note>> {
     try {
-      const data = await this.makeAuthenticatedRequest<any>('/user/notes');
-      // Backend returns { notes: [{ note_content, course_title, created_at }] }
-      const notes = (data || []) as any[];
-      console.log('Notes fetched:', notes);
-      return notes.map((n, idx) => ({
+      const data = await this.makeAuthenticatedRequest<PaginatedResponse<any>>(`/user/notes?page=${page}&items_per_page=${itemsPerPage}`);
+      
+      // Transform items to Note format
+      const notes = data.items.map((n, idx) => ({
         id: n.id || Number(new Date(n.created_at).getTime() || idx),
         user_id: n.user_id || '',
         title: n.title,
@@ -815,10 +897,20 @@ class ApiService {
         updated_at: n.updated_at || n.created_at,
       }));
       
+      return {
+        ...data,
+        items: notes
+      };
     } catch (error) {
       console.error('Error fetching notes:', error);
-      return []; // Return empty array on error
+      return { items: [], total: 0, page: 1, items_per_page: itemsPerPage, total_pages: 0, has_next: false, has_prev: false };
     }
+  }
+
+  // Backward compatible method - fetches all notes (for existing code)
+  static async getAllNotes(): Promise<Note[]> {
+    const response = await this.getNotes(1, 100);
+    return response.items;
   }
 
   static async createNote(title: string, content: string): Promise<Note> {
@@ -933,9 +1025,24 @@ class ApiService {
     console.log('[API] Making request to:', url);
     
     const data = await this.makeAuthenticatedRequest<any>(url);
-    // Backend returns array directly, not wrapped in messages property
-    const list = Array.isArray(data) ? data : (data.messages || []);
-    console.log('[Chat] Raw messages from backend for thread_id:', thread_id, 'messages:', list);
+    console.log('[Chat] Raw response from backend:', JSON.stringify(data).substring(0, 200));
+    
+    // Backend returns paginated response { items: [...], total, page, ... }
+    let list: any[] = [];
+    if (Array.isArray(data)) {
+      list = data;
+      console.log('[Chat] Response is array with', list.length, 'items');
+    } else if (data && data.items && Array.isArray(data.items)) {
+      list = data.items;
+      console.log('[Chat] Response is paginated with', list.length, 'items');
+    } else if (data && data.messages && Array.isArray(data.messages)) {
+      list = data.messages;
+      console.log('[Chat] Response has messages array with', list.length, 'items');
+    } else {
+      console.warn('[Chat] Unexpected response format:', data);
+      list = [];
+    }
+    console.log('[Chat] Processing', list.length, 'messages for thread_id:', thread_id);
     
     return list.map((msg: any, idx: number) => {
       // Determine sender based on sender_type
@@ -997,89 +1104,53 @@ class ApiService {
     });
   }
 
-  static async uploadProfilePicture(imageUri: string): Promise<{ path: string; public_url: string }> {
-    // Use Supabase storage if configured
-    const SupabaseStorage = await import('./supabaseStorage').then(m => m.default);
-    if (SupabaseStorage.isConfigured()) {
-      try {
-        const userData = await AsyncStorage.getItem('regod_user_data');
-        if (userData) {
-          const user = JSON.parse(userData);
-          const result = await SupabaseStorage.uploadAvatar(user.id, imageUri);
-          
-          // Update user profile with new avatar URL
-          await this.updateProfile({ avatar_url: result.publicUrl });
-          
-          return {
-            path: result.path,
-            public_url: result.publicUrl,
-          };
-        }
-      } catch (error) {
-        console.error('[UPLOAD] Supabase upload failed, falling back to backend:', error);
-        // Fall through to backend upload
+  static async uploadProfilePicture(imageUri: string): Promise<{ success: boolean; message: string; avatar_url: string; filename: string }> {
+    try {
+      // For React Native, we need to create a proper file object
+      const file = {
+        uri: imageUri,
+        type: 'image/jpeg',
+        name: `profile_${Date.now()}.jpg`,
+      } as any;
+      
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      // Get auth headers without Content-Type (let React Native set it for multipart/form-data)
+      const headers = await this.getAuthHeaders();
+      delete headers['Content-Type'];
+      
+      console.log('[UPLOAD] Uploading avatar to backend:', {
+        uri: imageUri,
+        baseUrl: await this.base()
+      });
+      
+      const result = await fetch(`${await this.base()}/upload/avatar`, {
+        method: 'POST',
+        headers,
+        body: formData,
+      });
+      
+      console.log('[UPLOAD] Upload response:', {
+        status: result.status,
+        statusText: result.statusText,
+        ok: result.ok
+      });
+      
+      if (!result.ok) {
+        const errorData = await result.json().catch(() => ({}));
+        console.error('[UPLOAD] Upload error:', errorData);
+        throw new Error(errorData.detail || `Upload failed with status ${result.status}`);
       }
+      
+      const data = await result.json();
+      console.log('[UPLOAD] Upload success:', data);
+      
+      return data;
+    } catch (error) {
+      console.error('[UPLOAD] Profile picture upload failed:', error);
+      throw error;
     }
-
-    // Fallback to backend upload
-    const formData = new FormData();
-    
-    // Generate a filename
-    const filename = `profile_${Date.now()}.jpg`;
-    
-    // For React Native, we need to create a proper file object
-    const file = {
-      uri: imageUri,
-      type: 'image/jpeg',
-      name: filename,
-    } as any;
-    
-    formData.append('file', file);
-    
-    const headers = await this.getAuthHeaders();
-    // Remove Content-Type header to let the browser set it with boundary for FormData
-    delete headers['Content-Type'];
-    
-    console.log('[UPLOAD] Uploading profile picture:', {
-      uri: imageUri,
-      filename,
-      headers: Object.keys(headers),
-      baseUrl: await this.base()
-    });
-    
-    const result = await fetch(`${await this.base()}/uploads/profile-picture`, {
-      method: 'POST',
-      headers,
-      body: formData,
-    });
-    
-    console.log('[UPLOAD] Upload response:', {
-      status: result.status,
-      statusText: result.statusText,
-      ok: result.ok
-    });
-    
-    if (!result.ok) {
-      const errorData = await result.json().catch(() => ({}));
-      console.error('[UPLOAD] Upload error:', errorData);
-      throw new Error(errorData.detail || `Upload failed with status ${result.status}`);
-    }
-    
-    const data = await result.json();
-    console.log('[UPLOAD] Upload success:', data);
-    
-    // Construct the full URL for the uploaded image
-    const baseUrl = await this.base();
-    // Remove /api from baseUrl for static file serving
-    const staticBaseUrl = baseUrl.replace('/api', '');
-    const publicUrl = data.path.startsWith('http') ? data.path : `${staticBaseUrl}${data.path}`;
-    
-    console.log('[UPLOAD] Constructed public URL:', publicUrl);
-    
-    return {
-      path: data.path,
-      public_url: publicUrl,
-    };
   }
 
   // Supabase storage methods
@@ -1158,10 +1229,11 @@ class ApiService {
     });
   }
 
-  static async getChapterFavorites(): Promise<Array<{
+  static async getChapterFavorites(page: number = 1, itemsPerPage: number = 50): Promise<PaginatedResponse<{
     id: number;
     user_id: string;
     chapter_id: number;
+    course_id: number;
     created_at: string;
     chapter_title: string;
     course_title: string;
@@ -1170,7 +1242,25 @@ class ApiService {
     completed_modules: number;
     total_modules: number;
   }>> {
-    return this.makeAuthenticatedRequest('/user/chapter-favourites');
+    return this.makeAuthenticatedRequest(`/user/chapter-favourites?page=${page}&items_per_page=${itemsPerPage}`);
+  }
+
+  // Backward compatible method - fetches all chapter favorites
+  static async getAllChapterFavorites(): Promise<Array<{
+    id: number;
+    user_id: string;
+    chapter_id: number;
+    course_id: number;
+    created_at: string;
+    chapter_title: string;
+    course_title: string;
+    cover_image_url?: string;
+    progress_percentage: number;
+    completed_modules: number;
+    total_modules: number;
+  }>> {
+    const response = await this.getChapterFavorites(1, 100);
+    return response.items;
   }
 
   static async deleteChapterFavorite(favoriteId: number): Promise<{ message: string }> {

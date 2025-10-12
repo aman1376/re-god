@@ -49,6 +49,7 @@ export default function FavoritesScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [favoriteMusic, setFavoriteMusic] = useState<any[]>([]);
+  const [musicLoading, setMusicLoading] = useState(false);
   
   // Admin/Teacher responses state
   const [responses, setResponses] = useState<any[]>([]);
@@ -64,8 +65,14 @@ export default function FavoritesScreen() {
         if (isAdminOrTeacher) {
           loadResponses();
         } else {
-          loadFavoritedChapters();
-          loadFavoriteMusic();
+          // Load chapters first, then use that data for music loading
+          loadFavoritedChapters().then((chaptersData) => {
+            if (chaptersData && chaptersData.length > 0) {
+              loadFavoriteMusic(chaptersData);
+            } else {
+              setFavoriteMusic([]); // Clear music if no chapters
+            }
+          });
         }
       }
     }, [isAuthenticated, authLoading, isAdminOrTeacher])
@@ -76,10 +83,12 @@ export default function FavoritesScreen() {
       if (!refreshing) {
         setLoading(true);
       }
-      const favoritedChaptersData = await ApiService.getChapterFavorites();
+      const favoritedChaptersData = await ApiService.getAllChapterFavorites();
       setFavoritedChapters(favoritedChaptersData);
+      return favoritedChaptersData; // Return data for music loading
     } catch (error) {
       console.error('Error loading favorited chapters:', error);
+      return [];
     } finally {
       if (!refreshing) {
         setLoading(false);
@@ -87,44 +96,65 @@ export default function FavoritesScreen() {
     }
   };
 
-  const loadFavoriteMusic = async () => {
+  const loadFavoriteMusic = async (chaptersData?: any[]) => {
     try {
-      // Get all favorited chapters
-      const favoritedChaptersData = await ApiService.getChapterFavorites();
+      setMusicLoading(true);
+      // Use provided chapters data or fetch fresh data
+      const favoritedChaptersData = chaptersData || await ApiService.getAllChapterFavorites();
       const musicItems: any[] = [];
 
-      // For each favorited chapter, get its modules and extract music
+      console.log(`Loading music for ${favoritedChaptersData.length} chapters`);
+
+      // Group chapters by course to avoid duplicate API calls
+      const chaptersByCourse = new Map<number, any[]>();
       for (const chapter of favoritedChaptersData) {
+        const courseId = (chapter as any).course_id;
+        if (!courseId) {
+          console.warn(`Chapter ${chapter.chapter_id} missing course_id, skipping music extraction`);
+          continue;
+        }
+        if (!chaptersByCourse.has(courseId)) {
+          chaptersByCourse.set(courseId, []);
+        }
+        chaptersByCourse.get(courseId)!.push(chapter);
+      }
+
+      console.log(`Grouped chapters into ${chaptersByCourse.size} unique courses`);
+
+      // Fetch modules once per course (not per chapter)
+      for (const [courseId, chapters] of chaptersByCourse.entries()) {
         try {
-          // Use course_id if available, otherwise skip this chapter
-          const courseId = (chapter as any).course_id;
-          if (!courseId) {
-            console.warn(`Chapter ${chapter.chapter_id} missing course_id, skipping music extraction`);
-            continue;
-          }
-          
-          const modules = await ApiService.getCourseModules(courseId);
+          const modules = await ApiService.getAllCourseModules(courseId);
           const musicModules = modules.filter(module => module.music_selection);
           
-          musicModules.forEach(module => {
-            musicItems.push({
-              id: `${chapter.chapter_id}-${module.id}`,
-              title: module.music_selection,
-              mediaUrl: module.media_url,
-              chapterTitle: chapter.chapter_title,
-              courseTitle: chapter.course_title,
-              moduleId: module.id,
-              courseId: courseId
+          console.log(`Found ${musicModules.length} music modules in course ${courseId} for ${chapters.length} chapters`);
+          
+          // Add music items for all chapters in this course
+          chapters.forEach(chapter => {
+            musicModules.forEach(module => {
+              musicItems.push({
+                id: `${chapter.chapter_id}-${module.id}`,
+                title: module.music_selection,
+                mediaUrl: module.media_url,
+                chapterTitle: chapter.chapter_title,
+                courseTitle: chapter.course_title,
+                moduleId: module.id,
+                courseId: courseId
+              });
             });
           });
         } catch (error) {
-          console.error(`Error loading modules for chapter ${chapter.chapter_id}:`, error);
+          console.error(`Error loading modules for course ${courseId}:`, error);
         }
       }
 
+      console.log(`Total music items loaded: ${musicItems.length}`);
       setFavoriteMusic(musicItems);
     } catch (error) {
       console.error('Error loading favorite music:', error);
+      setFavoriteMusic([]); // Ensure state is cleared on error
+    } finally {
+      setMusicLoading(false);
     }
   };
 
@@ -159,7 +189,7 @@ export default function FavoritesScreen() {
   const handleChapterPress = async (chapter: any) => {
     try {
       // Load modules for this chapter
-      const courseModules = await ApiService.getCourseModules(chapter.course_id);
+      const courseModules = await ApiService.getAllCourseModules(chapter.course_id);
       setModules(courseModules);
       setSelectedChapter(chapter);
       setShowLessonModal(true);
@@ -193,8 +223,12 @@ export default function FavoritesScreen() {
     setRefreshing(true);
     try {
       console.log('Manual refresh triggered');
-      await loadFavoritedChapters();
-      await loadFavoriteMusic();
+      const chaptersData = await loadFavoritedChapters();
+      if (chaptersData && chaptersData.length > 0) {
+        await loadFavoriteMusic(chaptersData);
+      } else {
+        setFavoriteMusic([]); // Clear music if no chapters
+      }
     } catch (error) {
       console.error('Error refreshing favorites:', error);
     } finally {
@@ -565,7 +599,7 @@ const styles = StyleSheet.create({
   // Music section styles - fixed at bottom
   musicSection: {
     position: 'absolute',
-    bottom: 100,
+    bottom: 80,
     left: 0,
     right: 0,
     backgroundColor: '#f5f2ec',
@@ -584,10 +618,12 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginBottom: 10,
     paddingHorizontal: 20,
+    // paddingBottom: 10,
     color: '#333',
   },
   musicScrollContent: {
     paddingHorizontal: 10,
+    paddingBottom: 6,
     gap: 1,
   },
   musicItemContainer: {

@@ -87,7 +87,7 @@ export default function ContentManagerPage() {
 
   const fetchCourses = async () => {
     try {
-      const list = await AdminApiService.getCourses()
+      const list = await AdminApiService.getAllCourses()
       setCourses(list)
       if (list.length > 0 && !selectedCourseId) {
         setSelectedCourseId(list[0].id)
@@ -99,7 +99,7 @@ export default function ContentManagerPage() {
 
   const fetchChapters = async (courseId: number) => {
     try {
-      const list = await AdminApiService.getChapters(courseId)
+      const list = await AdminApiService.getAllChapters(courseId)
       setChapters(list)
     } catch (error) {
       console.error("Failed to fetch chapters", error)
@@ -108,7 +108,7 @@ export default function ContentManagerPage() {
 
   const fetchModules = async (courseId: number) => {
     try {
-      const list = await AdminApiService.getModules(courseId)
+      const list = await AdminApiService.getAllModules(courseId)
       setModules(list)
       
       // Check quiz responses for each module

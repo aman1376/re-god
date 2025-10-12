@@ -56,14 +56,18 @@ export default function LessonIndexModal({
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
           <View style={styles.progressContainer}>
-            <CircularProgress
-              size={60}
-              strokeWidth={6}
-              progress={progressPercentage || 0}
-              backgroundColor="#E8E8E8"
-              progressColor="#6B8E23"
-            />
-            <Text style={styles.progressText}>{(progressPercentage || 0).toFixed(0)}%</Text>
+            <View style={styles.circularProgressWrapper}>
+              <CircularProgress
+                size={60}
+                strokeWidth={6}
+                progress={progressPercentage || 0}
+                backgroundColor="#E8E8E8"
+                progressColor="#6B8E23"
+              />
+              <View style={styles.progressTextContainer}>
+                <Text style={styles.progressText}>{(progressPercentage || 0).toFixed(0)}%</Text>
+              </View>
+            </View>
           </View>
           <View style={styles.titleContainer}>
             <Text style={styles.title}>{chapterTitle || 'Complete'}</Text>
@@ -178,17 +182,30 @@ const styles = StyleSheet.create({
     borderBottomColor: '#E0E0E0',
   },
   progressContainer: {
-    position: 'relative',
     marginRight: 15,
   },
-  progressText: {
+  circularProgressWrapper: {
+    width: 60,
+    height: 60,
+    position: 'relative',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  progressTextContainer: {
     position: 'absolute',
-    top: '50%',
-    left: '50%',
-    transform: [{ translateX: -15 }, { translateY: -10 }],
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  progressText: {
     fontSize: 14,
     fontWeight: 'bold',
     color: '#6B8E23',
+    includeFontPadding: false,
+    textAlign: 'center',
   },
   titleContainer: {
     flex: 1,

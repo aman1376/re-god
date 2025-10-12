@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List
 from datetime import datetime
@@ -6,9 +6,10 @@ import uuid
 
 from app.database import get_db
 from app.models import User, Course, UserCourseProgress, TeacherAssignment, Module, Chapter, UserModuleProgress, QuizResponse
-from app.schemas import DashboardResponse, UserCourseProgressBase, CourseResponse, ModuleResponse, CourseBase, ModuleBase, ModuleUpdate, ChapterBase, ChapterResponse
+from app.schemas import DashboardResponse, UserCourseProgressBase, CourseResponse, ModuleResponse, CourseBase, ModuleBase, ModuleUpdate, ChapterBase, ChapterResponse, PaginatedResponse
 from app.utils.auth import get_current_user
 from app.rbac import require_permission, require_role
+from app.utils.pagination import paginate, create_paginated_response
 
 router = APIRouter()
 
@@ -745,21 +746,23 @@ async def get_chapter_progress(
             detail={"error": {"code": "INTERNAL_ERROR", "message": f"Internal server error: {str(e)}"}}
         )
 
-@router.get("/courses", response_model=List[CourseResponse])
+@router.get("/courses")
 async def get_courses(
+    page: int = Query(1, ge=1),
+    items_per_page: int = Query(50, ge=1, le=100),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get all courses with access control"""
+    """Get all courses with pagination and access control"""
     if current_user.get("role") == "admin":
         # Admins can see all courses
-        courses = db.query(Course).filter(Course.is_active == True).all()
+        query = db.query(Course).filter(Course.is_active == True)
     elif current_user.get("role") == "teacher":
         # Teachers can see their own courses
-        courses = db.query(Course).filter(
+        query = db.query(Course).filter(
             Course.created_by == current_user["id"],
             Course.is_active == True
-        ).all()
+        )
     else:
         # Students can only see courses from teachers they have access to
         access_records = db.query(TeacherAssignment).filter(
@@ -770,16 +773,19 @@ async def get_courses(
         teacher_ids = [access.teacher_id for access in access_records]
         
         if not teacher_ids:
-            return []
+            return create_paginated_response(items=[], total=0, page=page, items_per_page=items_per_page, has_next=False, has_prev=False)
             
-        courses = db.query(Course).filter(
+        query = db.query(Course).filter(
             Course.created_by.in_(teacher_ids),
             Course.is_active == True
-        ).all()
+        )
     
-    # Normalize response for FE/mobile
-    return [
-        CourseResponse.model_validate({
+    # Apply pagination
+    items, total, page, items_per_page, has_next, has_prev = paginate(query, page, items_per_page)
+    
+    # Format response
+    result = [
+        {
             "id": c.id,
             "title": c.title,
             "description": c.description,
@@ -788,17 +794,21 @@ async def get_courses(
             "difficulty": c.difficulty,
             "total_modules": c.total_modules,
             "created_by": str(c.created_by),
-            "created_at": c.created_at,
-        }) for c in courses
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+        } for c in items
     ]
+    
+    return create_paginated_response(items=result, total=total, page=page, items_per_page=items_per_page, has_next=has_next, has_prev=has_prev)
 
-@router.get("/courses/{course_id}/modules", response_model=List[ModuleResponse])
+@router.get("/courses/{course_id}/modules")
 async def get_course_modules(
     course_id: int,
+    page: int = Query(1, ge=1),
+    items_per_page: int = Query(50, ge=1, le=100),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get modules for a specific course with access control"""
+    """Get modules for a specific course with pagination and access control"""
     # Check if user has access to this course
     course = db.query(Course).filter(Course.id == course_id).first()
     if not course:
@@ -821,14 +831,16 @@ async def get_course_modules(
                 detail="You don't have access to this course"
             )
     
-    # Get modules for the course
-    modules = db.query(Module).filter(
+    # Get modules for the course with pagination
+    query = db.query(Module).filter(
         Module.course_id == course_id,
         Module.is_active == True
-    ).order_by(Module.order).all()
+    ).order_by(Module.order)
     
-    return [
-        ModuleResponse.model_validate({
+    items, total, page, items_per_page, has_next, has_prev = paginate(query, page, items_per_page)
+    
+    result = [
+        {
             "id": m.id,
             "course_id": m.course_id,
             "title": m.title,
@@ -852,8 +864,10 @@ async def get_course_modules(
             "header_image_url": m.header_image_url,
             "media_url": m.media_url,
             "quiz": m.quiz,
-        }) for m in modules
+        } for m in items
     ]
+    
+    return create_paginated_response(items=result, total=total, page=page, items_per_page=items_per_page, has_next=has_next, has_prev=has_prev)
 
 
 @router.post("/courses", response_model=CourseResponse)
@@ -898,7 +912,8 @@ async def update_course(
     course = db.query(Course).filter(Course.id == course_id).first()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    if not current_user.get("role") == "admin" and course.created_by != current_user["id"]:
+    # Fix UUID comparison by converting both to strings
+    if current_user.get("role") != "admin" and str(course.created_by) != str(current_user["id"]):
         raise HTTPException(status_code=403, detail="Not allowed")
 
     course.title = payload.title
@@ -1126,17 +1141,34 @@ async def create_chapter(
     return chapter
 
 
-@router.get("/courses/{course_id}/chapters", response_model=List[ChapterResponse])
+@router.get("/courses/{course_id}/chapters")
 async def list_chapters(
     course_id: int,
+    page: int = Query(1, ge=1),
+    items_per_page: int = Query(50, ge=1, le=100),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """Get chapters for a course with pagination"""
     course = db.query(Course).filter(Course.id == course_id).first()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
-    chapters = db.query(Chapter).filter(Chapter.course_id == course_id, Chapter.is_active == True).order_by(Chapter.order).all()
-    return chapters
+    
+    query = db.query(Chapter).filter(Chapter.course_id == course_id, Chapter.is_active == True).order_by(Chapter.order)
+    items, total, page, items_per_page, has_next, has_prev = paginate(query, page, items_per_page)
+    
+    result = [
+        {
+            "id": c.id,
+            "course_id": c.course_id,
+            "title": c.title,
+            "cover_image_url": c.cover_image_url,
+            "order": c.order,
+            "quiz": c.quiz
+        } for c in items
+    ]
+    
+    return create_paginated_response(items=result, total=total, page=page, items_per_page=items_per_page, has_next=has_next, has_prev=has_prev)
 
 
 @router.put("/courses/{course_id}/chapters/{chapter_id}", response_model=ChapterResponse)
@@ -1152,7 +1184,8 @@ async def update_chapter(
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
     course = db.query(Course).filter(Course.id == course_id).first()
-    if not course or (not current_user.get("role") == "admin" and course.created_by != current_user["id"]):
+    # Fix UUID comparison by converting both to strings
+    if not course or (current_user.get("role") != "admin" and str(course.created_by) != str(current_user["id"])):
         raise HTTPException(status_code=403, detail="Not allowed")
     chapter.title = payload.title
     chapter.cover_image_url = payload.cover_image_url

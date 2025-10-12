@@ -165,10 +165,11 @@ async def upload_course_cover(
 ):
     """Upload course cover image"""
     
-    # Check permissions
+    # Check permissions - allow both admins and teachers
     current_user_roles = current_user.get("roles", [])
-    if "admin" not in current_user_roles and current_user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Only admins can upload course covers")
+    current_user_role = current_user.get("role")
+    if "admin" not in current_user_roles and current_user_role not in ["admin", "teacher"]:
+        raise HTTPException(status_code=403, detail="Only admins and teachers can upload course covers")
     
     # Validate file type
     if not file.content_type or not file.content_type.startswith('image/'):
@@ -192,8 +193,8 @@ async def upload_course_cover(
         # Upload to Supabase
         public_url = await upload_to_supabase("courses", filename, file_content, file.content_type)
         
-        # Update course cover URL in database
-        course.cover_image_url = public_url
+        # Update course thumbnail URL in database
+        course.thumbnail_url = public_url
         db.commit()
         db.refresh(course)
         
@@ -218,10 +219,11 @@ async def upload_chapter_thumbnail(
 ):
     """Upload chapter thumbnail image"""
     
-    # Check permissions
+    # Check permissions - allow both admins and teachers
     current_user_roles = current_user.get("roles", [])
-    if "admin" not in current_user_roles and current_user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Only admins can upload chapter thumbnails")
+    current_user_role = current_user.get("role")
+    if "admin" not in current_user_roles and current_user_role not in ["admin", "teacher"]:
+        raise HTTPException(status_code=403, detail="Only admins and teachers can upload chapter thumbnails")
     
     # Validate file type
     if not file.content_type or not file.content_type.startswith('image/'):
@@ -249,8 +251,8 @@ async def upload_chapter_thumbnail(
         # Upload to Supabase
         public_url = await upload_to_supabase("courses", filename, file_content, file.content_type)
         
-        # Update chapter thumbnail URL in database
-        chapter.thumbnail_url = public_url
+        # Update chapter cover_image_url in database
+        chapter.cover_image_url = public_url
         db.commit()
         db.refresh(chapter)
         
@@ -276,10 +278,11 @@ async def upload_lesson_image(
 ):
     """Upload lesson image"""
     
-    # Check permissions
+    # Check permissions - allow both admins and teachers
     current_user_roles = current_user.get("roles", [])
-    if "admin" not in current_user_roles and current_user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Only admins can upload lesson images")
+    current_user_role = current_user.get("role")
+    if "admin" not in current_user_roles and current_user_role not in ["admin", "teacher"]:
+        raise HTTPException(status_code=403, detail="Only admins and teachers can upload lesson images")
     
     # Validate file type
     if not file.content_type or not file.content_type.startswith('image/'):
@@ -310,8 +313,8 @@ async def upload_lesson_image(
         # Upload to Supabase
         public_url = await upload_to_supabase("courses", filename, file_content, file.content_type)
         
-        # Update lesson image URL in database
-        lesson.image_url = public_url
+        # Update lesson header_image_url in database
+        lesson.header_image_url = public_url
         db.commit()
         db.refresh(lesson)
         
@@ -334,10 +337,11 @@ async def delete_course_cover(
 ):
     """Delete course cover image"""
     
-    # Check permissions
+    # Check permissions - allow both admins and teachers
     current_user_roles = current_user.get("roles", [])
-    if "admin" not in current_user_roles and current_user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Only admins can delete course covers")
+    current_user_role = current_user.get("role")
+    if "admin" not in current_user_roles and current_user_role not in ["admin", "teacher"]:
+        raise HTTPException(status_code=403, detail="Only admins and teachers can delete course covers")
     
     try:
         # Get course
@@ -376,10 +380,11 @@ async def delete_chapter_thumbnail(
 ):
     """Delete chapter thumbnail image"""
     
-    # Check permissions
+    # Check permissions - allow both admins and teachers
     current_user_roles = current_user.get("roles", [])
-    if "admin" not in current_user_roles and current_user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Only admins can delete chapter thumbnails")
+    current_user_role = current_user.get("role")
+    if "admin" not in current_user_roles and current_user_role not in ["admin", "teacher"]:
+        raise HTTPException(status_code=403, detail="Only admins and teachers can delete chapter thumbnails")
     
     try:
         # Get chapter
@@ -419,10 +424,11 @@ async def delete_lesson_image(
 ):
     """Delete lesson image"""
     
-    # Check permissions
+    # Check permissions - allow both admins and teachers
     current_user_roles = current_user.get("roles", [])
-    if "admin" not in current_user_roles and current_user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Only admins can delete lesson images")
+    current_user_role = current_user.get("role")
+    if "admin" not in current_user_roles and current_user_role not in ["admin", "teacher"]:
+        raise HTTPException(status_code=403, detail="Only admins and teachers can delete lesson images")
     
     try:
         # Get lesson

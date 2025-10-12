@@ -30,7 +30,7 @@ export default function NotesScreen() {
     try {
       setLoading(true);
       setError(null);
-      const notesData = await ApiService.getNotes();
+      const notesData = await ApiService.getAllNotes();
       setNotes(notesData);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load notes');

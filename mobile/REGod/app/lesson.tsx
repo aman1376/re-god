@@ -297,7 +297,7 @@ export default function LessonScreen() {
       }
 
       // Get all modules for the course and find the specific one
-      const modules = await ApiService.getCourseModules(Number(courseId));
+      const modules = await ApiService.getAllCourseModules(Number(courseId));
       const foundModule = modules.find(m => m.id === Number(moduleId));
 
       if (!foundModule) {

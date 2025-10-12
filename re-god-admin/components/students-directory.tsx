@@ -14,16 +14,23 @@ export function StudentsDirectory() {
   const [students, setStudents] = useState<Student[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState("")
+  const [page, setPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(1)
+  const [total, setTotal] = useState(0)
+  const [itemsPerPage] = useState(10)
 
   // Check if user has admin permissions
   const isAdmin = user?.roles?.includes('admin') || user?.role === 'admin'
 
-  const fetchStudents = async () => {
+  const fetchStudents = async (pageNum: number = 1) => {
     try {
       setIsLoading(true)
-      const data = await AdminApiService.getStudentsDirectory()
+      const data = await AdminApiService.getStudentsDirectory(pageNum, itemsPerPage)
       console.log('Students:', data)
-      setStudents(data)
+      setStudents(data.items)
+      setPage(data.page)
+      setTotalPages(data.total_pages)
+      setTotal(data.total)
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to fetch students';
       console.log(errorMessage)
@@ -35,7 +42,7 @@ export function StudentsDirectory() {
 
   useEffect(() => {
     console.log('StudentsDirectory: Making API call for admin user')
-    fetchStudents()
+    fetchStudents(1)
   }, [])
 
   const handleDeleteStudent = async (studentId: string) => {
@@ -124,6 +131,40 @@ export function StudentsDirectory() {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* Pagination Controls */}
+        {!isLoading && !error && students.length > 0 && (
+          <div className="flex items-center justify-between mt-6 pt-4 border-t border-gray-200">
+            <div className="text-sm text-gray-600">
+              Showing {students.length} of {total} students
+            </div>
+            {totalPages > 1 && (
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => fetchStudents(page - 1)}
+                  disabled={page === 1}
+                  className="px-4"
+                >
+                  Previous
+                </Button>
+                <span className="px-4 py-2 text-sm text-gray-700">
+                  Page {page} of {totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => fetchStudents(page + 1)}
+                  disabled={page >= totalPages}
+                  className="px-4"
+                >
+                  Next
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </CardContent>

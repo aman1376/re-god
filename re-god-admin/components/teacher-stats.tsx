@@ -34,65 +34,38 @@ export function TeacherStats() {
       title: "My Courses",
       value: stats.my_courses.toString(),
       icon: BookOpen,
-      color: "bg-blue-600",
+      color: "bg-red-800",
     },
     {
       title: "Assigned Students",
       value: stats.assigned_students.toString(),
       icon: Users,
-      color: "bg-green-600",
+      color: "bg-red-800",
     },
   ] : []
-
-  if (isLoading) {
-    return (
-      <Card className="bg-white">
-        <CardContent className="p-6">
-          <div className="animate-pulse">
-            <div className="h-4 bg-gray-200 rounded w-3/4 mb-4"></div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="h-16 bg-gray-200 rounded"></div>
-              <div className="h-16 bg-gray-200 rounded"></div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-    )
-  }
-
-  if (error) {
-    return (
-      <Card className="bg-white">
-        <CardContent className="p-6">
-          <div className="text-center text-red-600">
-            <p>Failed to load teacher stats</p>
-            <p className="text-sm text-gray-500">{error}</p>
-          </div>
-        </CardContent>
-      </Card>
-    )
-  }
 
   return (
     <Card className="bg-white">
       <CardContent className="p-6">
         <h3 className="text-lg font-semibold text-gray-900 mb-4">My Teaching Stats</h3>
-        <div className="grid grid-cols-2 gap-4">
-          {statsConfig.map((stat, index) => {
-            const IconComponent = stat.icon
-            return (
-              <div key={index} className="flex items-center space-x-3">
-                <div className={`p-3 rounded-lg ${stat.color}`}>
-                  <IconComponent className="w-6 h-6 text-white" />
+        
+        {isLoading ? (
+          <div className="text-center py-4 text-gray-500">Loading statistics...</div>
+        ) : error ? (
+          <div className="text-center py-4 text-red-500">{error}</div>
+        ) : (
+          <div className="grid grid-cols-2 gap-8 px-12">
+            {statsConfig.map((stat, index) => (
+              <div key={index} className="text-center">
+                <div className={`${stat.color} rounded-lg p-4 mb-2`}>
+                  <stat.icon className="w-6 h-6 text-white mx-auto" />
                 </div>
-                <div>
-                  <p className="text-2xl font-bold text-gray-900">{stat.value}</p>
-                  <p className="text-sm text-gray-600">{stat.title}</p>
-                </div>
+                <div className="text-2xl font-bold text-gray-900">{stat.value}</div>
+                <div className="text-sm text-gray-600">{stat.title}</div>
               </div>
-            )
-          })}
-        </div>
+            ))}
+          </div>
+        )}
       </CardContent>
     </Card>
   )

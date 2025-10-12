@@ -28,7 +28,7 @@ export default function NotesScreen() {
       console.log('Notes screen: Starting to load notes...');
       setLoading(true);
       setError(null);
-      const notesData = await ApiService.getNotes();
+      const notesData = await ApiService.getAllNotes();
       console.log('Notes screen: Received notes data:', notesData);
       setNotes(notesData);
     } catch (err) {

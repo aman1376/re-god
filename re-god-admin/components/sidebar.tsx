@@ -3,6 +3,7 @@
 import { Home, FileText, Settings, User, LogOut, Users } from "lucide-react"
 import { useRouter, usePathname } from "next/navigation"
 import { useAuth } from "@/contexts/auth-context"
+import Image from "next/image"
 
 export function Sidebar() {
   const router = useRouter()
@@ -20,9 +21,15 @@ export function Sidebar() {
   const isTeacher = user?.roles?.includes('teacher') || user?.role === 'teacher'
 
   return (
-    <div className="w-16 bg-white border-r border-gray-200 flex flex-col items-center py-4">
-      <div className="w-8 h-8 bg-red-800 rounded flex items-center justify-center mb-8">
-        <div className="w-4 h-4 bg-white rounded-sm"></div>
+    <div className="w-16 bg-white border-r border-gray-200 flex flex-col items-center py-4 px-10">
+      <div className="w-16  h-16 mb-8 flex items-center justify-center bg-black rounded-lg">
+        <Image
+          src="/logo.png"
+          alt="REGod Logo"
+          width={64}
+          height={32}
+          className="rounded-sm"
+        />
       </div>
 
       <nav className="flex flex-col space-y-6">
@@ -52,10 +59,10 @@ export function Sidebar() {
           </button>
         )}
 
-        <div className="flex flex-col items-center space-y-1 text-gray-400">
+        {/* <div className="flex flex-col items-center space-y-1 text-gray-400">
           <Settings className="w-5 h-5" />
           <span className="text-xs">Settings</span>
-        </div>
+        </div> */}
 
         <button
           onClick={() => router.push("/profile")}
