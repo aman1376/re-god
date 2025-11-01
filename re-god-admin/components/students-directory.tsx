@@ -1,10 +1,10 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { Trash2, Users } from "lucide-react"
+import { Trash2, Users, ChevronDown } from "lucide-react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import AdminApiService, { type Student } from "@/lib/api"
+import AdminApiService, { type Student, type Teacher } from "@/lib/api"
 import { useAuth } from "@/contexts/auth-context"
 import { useRouter } from "next/navigation"
 
@@ -12,12 +12,15 @@ export function StudentsDirectory() {
   const { user } = useAuth()
   const router = useRouter()
   const [students, setStudents] = useState<Student[]>([])
+  const [teachers, setTeachers] = useState<Teacher[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState("")
   const [page, setPage] = useState(1)
   const [totalPages, setTotalPages] = useState(1)
   const [total, setTotal] = useState(0)
   const [itemsPerPage] = useState(10)
+  const [editingTeacherId, setEditingTeacherId] = useState<string | null>(null)
+  const [updatingStudentId, setUpdatingStudentId] = useState<string | null>(null)
 
   // Check if user has admin permissions
   const isAdmin = user?.roles?.includes('admin') || user?.role === 'admin'
@@ -40,10 +43,22 @@ export function StudentsDirectory() {
     }
   }
 
+  const fetchTeachers = async () => {
+    try {
+      const data = await AdminApiService.getAllTeachers()
+      setTeachers(data)
+    } catch (err) {
+      console.error('Failed to fetch teachers:', err)
+    }
+  }
+
   useEffect(() => {
     console.log('StudentsDirectory: Making API call for admin user')
     fetchStudents(1)
-  }, [])
+    if (isAdmin) {
+      fetchTeachers()
+    }
+  }, [isAdmin])
 
   const handleDeleteStudent = async (studentId: string) => {
     if (!confirm('Are you sure you want to delete this student?')) {
@@ -62,6 +77,29 @@ export function StudentsDirectory() {
 
   const handleViewStudent = (studentId: string) => {
     router.push(`/students/${studentId}`)
+  }
+
+  const handleTeacherChange = async (studentId: string, teacherId: string) => {
+    if (!isAdmin) return
+    
+    setUpdatingStudentId(studentId)
+    try {
+      const result = await AdminApiService.updateStudentTeacher(studentId, teacherId)
+      
+      // Update the student in the local state
+      setStudents(prev => prev.map(s => 
+        s.id === studentId 
+          ? { ...s, teacher_id: result.teacher_id, teacher_name: result.teacher_name, teacher_code: result.teacher_code }
+          : s
+      ))
+      
+      setEditingTeacherId(null)
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to update student\'s teacher';
+      alert(errorMessage)
+    } finally {
+      setUpdatingStudentId(null)
+    }
   }
 
   return (
@@ -92,6 +130,12 @@ export function StudentsDirectory() {
                   <th className="text-left py-3 px-4 text-sm font-medium text-gray-600">Last Name</th>
                   <th className="text-left py-3 px-4 text-sm font-medium text-gray-600">Email Address</th>
                   <th className="text-left py-3 px-4 text-sm font-medium text-gray-600">Phone Number</th>
+                  {isAdmin && (
+                    <>
+                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-600">Teacher Name</th>
+                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-600">Teacher Code</th>
+                    </>
+                  )}
                   <th className="text-right py-3 px-4 text-sm font-medium text-gray-600">Actions</th>
                 </tr>
               </thead>
@@ -99,12 +143,24 @@ export function StudentsDirectory() {
                 {students.map((student) => (
                   <tr 
                     key={student.id} 
-                    className="border-b border-gray-100 hover:bg-gray-50 cursor-pointer transition-colors"
-                    onClick={() => handleViewStudent(student.id)}
+                    className="border-b border-gray-100 hover:bg-gray-50 transition-colors"
                   >
-                    <td className="py-4 px-4 text-sm text-gray-900">{student.first_name || '-'}</td>
-                    <td className="py-4 px-4 text-sm text-gray-600">{student.last_name || '-'}</td>
-                    <td className="py-4 px-4 text-sm">
+                    <td 
+                      className="py-4 px-4 text-sm text-gray-900 cursor-pointer"
+                      onClick={() => handleViewStudent(student.id)}
+                    >
+                      {student.first_name || '-'}
+                    </td>
+                    <td 
+                      className="py-4 px-4 text-sm text-gray-600 cursor-pointer"
+                      onClick={() => handleViewStudent(student.id)}
+                    >
+                      {student.last_name || '-'}
+                    </td>
+                    <td 
+                      className="py-4 px-4 text-sm cursor-pointer"
+                      onClick={() => handleViewStudent(student.id)}
+                    >
                       <a 
                         href={`mailto:${student.email}`} 
                         className="text-blue-600 hover:underline"
@@ -113,7 +169,57 @@ export function StudentsDirectory() {
                         {student.email}
                       </a>
                     </td>
-                    <td className="py-4 px-4 text-sm text-gray-600">{student.phone || '-'}</td>
+                    <td 
+                      className="py-4 px-4 text-sm text-gray-600 cursor-pointer"
+                      onClick={() => handleViewStudent(student.id)}
+                    >
+                      {student.phone || '-'}
+                    </td>
+                    {isAdmin && (
+                      <>
+                        <td className="py-4 px-4 text-sm text-gray-600">
+                          {editingTeacherId === student.id ? (
+                            <select
+                              className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                              value={student.teacher_id || ''}
+                              onChange={(e) => {
+                                if (e.target.value) {
+                                  handleTeacherChange(student.id, e.target.value)
+                                }
+                              }}
+                              disabled={updatingStudentId === student.id}
+                              onBlur={() => setEditingTeacherId(null)}
+                              autoFocus
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <option value="">Select Teacher</option>
+                              {teachers.map((teacher) => (
+                                <option key={teacher.id} value={teacher.id}>
+                                  {teacher.name}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <div 
+                              className="flex items-center gap-1 cursor-pointer hover:text-blue-600"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setEditingTeacherId(student.id)
+                              }}
+                            >
+                              <span>{student.teacher_name || '-'}</span>
+                              <ChevronDown className="w-4 h-4" />
+                            </div>
+                          )}
+                        </td>
+                        <td 
+                          className="py-4 px-4 text-sm text-gray-600 cursor-pointer"
+                          onClick={() => handleViewStudent(student.id)}
+                        >
+                          {student.teacher_code || '-'}
+                        </td>
+                      </>
+                    )}
                     <td className="py-4 px-4 text-right">
                       <Button 
                         variant="ghost" 

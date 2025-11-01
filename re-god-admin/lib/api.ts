@@ -56,6 +56,7 @@ interface Teacher {
   created_at: string;
   is_active: boolean;
   teacher_code?: string;
+  can_upload?: boolean;
 }
 
 // Pagination types
@@ -80,6 +81,9 @@ interface Student {
   created_at: string;
   is_active: boolean;
   enrolled_courses: number;
+  teacher_id?: string;
+  teacher_name?: string;
+  teacher_code?: string;
 }
 
 interface StudentAnalytics {
@@ -469,6 +473,38 @@ class AdminApiService {
   static async deleteStudent(studentId: string): Promise<{ message: string }> {
     return this.makeAuthenticatedRequest<{ message: string }>(`${API_BASE_URL}/admin/users/${studentId}`, {
       method: 'DELETE',
+    });
+  }
+
+  static async deleteUser(userId: string): Promise<{ message: string }> {
+    return this.makeAuthenticatedRequest<{ message: string }>(`${API_BASE_URL}/admin/users/${userId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  static async updateStudentTeacher(studentId: string, teacherId: string): Promise<{
+    success: boolean;
+    message: string;
+    student_id: string;
+    teacher_id?: string;
+    teacher_name?: string;
+    teacher_code?: string;
+  }> {
+    return this.makeAuthenticatedRequest(`${API_BASE_URL}/admin/students/${studentId}/teacher`, {
+      method: 'PUT',
+      body: JSON.stringify({ teacher_id: teacherId }),
+    });
+  }
+
+  static async toggleTeacherUploadPermission(teacherId: string, enabled: boolean): Promise<{
+    success: boolean;
+    message: string;
+    teacher_id: string;
+    permission_enabled: boolean;
+  }> {
+    return this.makeAuthenticatedRequest(`${API_BASE_URL}/admin/teachers/${teacherId}/permissions/upload`, {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
     });
   }
 

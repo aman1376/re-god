@@ -30,6 +30,15 @@ role_permissions = Table(
     Column("assigned_by", UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 )
 
+user_permissions = Table(
+    "user_permissions",
+    Base.metadata,
+    Column("user_id", UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("permission_id", Integer, ForeignKey("permissions.id", ondelete="CASCADE"), primary_key=True),
+    Column("granted_at", DateTime(timezone=True), server_default=func.now()),
+    Column("granted_by", UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+)
+
 
 # =========================
 # User & Auth Models
@@ -78,10 +87,25 @@ class User(Base):
     )
     assigned_roles = relationship("UserRoleAssignment", back_populates="assigner", foreign_keys="UserRoleAssignment.assigned_by")
     refresh_tokens = relationship("RefreshToken", back_populates="user")
+    # User-specific permissions (override role permissions)
+    user_permissions = relationship(
+        "Permission",
+        secondary=user_permissions,
+        primaryjoin="User.id==user_permissions.c.user_id",
+        secondaryjoin="Permission.id==user_permissions.c.permission_id"
+    )
 
     def has_permission(self, permission_name: str) -> bool:
-        # Check if user has the specific permission
-        has_specific = any(
+        # Check if user has the specific permission at user level (highest priority)
+        has_user_permission = any(
+            permission.name == permission_name
+            for permission in self.user_permissions
+        )
+        if has_user_permission:
+            return True
+        
+        # Check if user has the specific permission via their roles
+        has_role_permission = any(
             permission.name == permission_name
             for role in self.roles
             for permission in role.permissions
@@ -94,7 +118,7 @@ class User(Base):
             for permission in role.permissions
         )
         
-        return has_specific or has_admin_all
+        return has_role_permission or has_admin_all
 
     def has_role(self, role_name: str) -> bool:
         return any(role.name == role_name for role in self.roles)
@@ -316,6 +340,7 @@ class UserModuleProgress(Base):
     module_id = Column(Integer, ForeignKey("modules.id", ondelete="CASCADE"))
     status = Column(String, default="not_started")  # not_started, in_progress, completed
     completed_at = Column(DateTime(timezone=True), nullable=True)
+    quiz_score = Column(Integer, nullable=True)  # Quiz score percentage (0-100)
 
 
 class UserNote(Base):

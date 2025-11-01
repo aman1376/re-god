@@ -245,6 +245,24 @@ async def register_user(
                 active=True
             )
             db.add(assignment)
+        else:
+            # No teacher code provided - auto-assign to first admin
+            from app.models import TeacherAssignment, Role
+            admin_role = db.query(Role).filter(Role.name == "admin").first()
+            if admin_role:
+                # Get first admin user
+                admin_user = db.query(User).join(user_roles).filter(
+                    user_roles.c.role_id == admin_role.id
+                ).first()
+                
+                if admin_user:
+                    # Create teacher assignment linking student to admin
+                    assignment = TeacherAssignment(
+                        student_id=user.id,
+                        teacher_id=admin_user.id,
+                        active=True
+                    )
+                    db.add(assignment)
         
         db.commit()
         

@@ -158,12 +158,7 @@ export default function AuthScreen() {
       
       // Check if we're on signup stage and validate teacher code
       if (stage === 'signup') {
-        if (!teacherCode.trim()) {
-          Alert.alert('Teacher Code Required', 'Please enter a teacher code to create an account');
-          setIsLoading(false);
-          return;
-        }
-        
+        // Teacher code is now optional - no validation needed
         if (!name.trim()) {
           Alert.alert('Name Required', 'Please enter your full name to create an account');
           setIsLoading(false);
@@ -244,16 +239,17 @@ export default function AuthScreen() {
         if (userEmail) {
           console.log(`${provider} OAuth successful, exchanging token...`);
           
-          // For signup flow, we need to register the user with teacher code
+          // For signup flow, we need to register the user with optional teacher code
           if (stage === 'signup') {
-            console.log(`Taking SIGNUP path for ${provider} - registering with teacher code: ${teacherCode}`);
+            console.log(`Taking SIGNUP path for ${provider} - registering with optional teacher code`);
             try {
-              // Register user with teacher code using our backend
-              await register(userEmail, '', name.trim(), teacherCode.trim());
-              console.log(`${provider} signup with teacher code complete`);
+              // Register user with optional teacher code using our backend
+              // Backend will auto-assign to admin if no teacher code provided
+              await register(userEmail, '', name.trim(), teacherCode.trim() || undefined);
+              console.log(`${provider} signup complete (teacher code: ${teacherCode.trim() || 'none'})`);
             } catch (registerError) {
-              console.error('Registration with teacher code failed:', registerError);
-              Alert.alert('Registration Failed', 'Failed to register with teacher code. Please try again.');
+              console.error('Registration failed:', registerError);
+              Alert.alert('Registration Failed', 'Failed to register. Please try again.');
               setIsLoading(false);
               return;
             }
@@ -311,10 +307,7 @@ export default function AuthScreen() {
       return;
     }
     
-    if (!teacherCode.trim()) {
-      Alert.alert('Error', 'Please enter a teacher code');
-      return;
-    }
+    // Teacher code is now optional - no validation needed
     
     if (!email.trim() || !password.trim()) {
       Alert.alert('Error', 'Please enter email and password');
@@ -323,6 +316,7 @@ export default function AuthScreen() {
 
     try {
       setIsLoading(true);
+      // Register with optional teacher code - backend will auto-assign to admin if none provided
       await register(email.trim(), password, name.trim(), teacherCode.trim() || undefined);
       // Navigation will happen automatically via useEffect when isAuthenticated becomes true
     } catch (err) {
@@ -339,10 +333,7 @@ export default function AuthScreen() {
       return;
     }
     
-    if (!teacherCode.trim()) {
-      Alert.alert('Error', 'Please enter a teacher code');
-      return;
-    }
+    // Teacher code is now optional - no validation needed
     
     if (!email.trim()) {
       Alert.alert('Error', 'Please enter your email');
@@ -380,13 +371,14 @@ export default function AuthScreen() {
       if (res && res.status === 'complete' && res.createdSessionId) {
         await signUpCtx?.setActive?.({ session: res.createdSessionId });
         
-        // Register user with teacher code using our backend
+        // Register user with optional teacher code using our backend
+        // Backend will auto-assign to admin if no teacher code provided
         try {
-          await register(emailForClerk || email.trim(), '', name.trim(), teacherCode.trim());
-          console.log('Clerk signup with teacher code complete');
+          await register(emailForClerk || email.trim(), '', name.trim(), teacherCode.trim() || undefined);
+          console.log('Clerk signup complete (teacher code: ' + (teacherCode.trim() || 'none') + ')');
         } catch (registerError) {
-          console.error('Registration with teacher code failed:', registerError);
-          Alert.alert('Registration Failed', 'Failed to register with teacher code. Please try again.');
+          console.error('Registration failed:', registerError);
+          Alert.alert('Registration Failed', 'Failed to register. Please try again.');
           setIsLoading(false);
           return;
         }
@@ -742,7 +734,7 @@ export default function AuthScreen() {
                   <View style={styles.inputContainer}>
                     <TextInput
                       style={styles.input}
-                      placeholder="Teacher's Code (Required)"
+                      placeholder="Teacher's Code (Optional)"
                       placeholderTextColor="rgba(128, 128, 128, 0.7)"
                       value={teacherCode}
                       onChangeText={setTeacherCode}
@@ -819,9 +811,9 @@ export default function AuthScreen() {
                   {/* Clerk hosted email verification flow */}
                   {!showClerkVerify && (
                     <TouchableOpacity
-                      style={[styles.createAccountButton, (isLoading || !name.trim() || !teacherCode.trim()) && { opacity: 0.7 }]}
+                      style={[styles.createAccountButton, (isLoading || !name.trim()) && { opacity: 0.7 }]}
                       onPress={handleClerkEmailSignup}
-                      disabled={isLoading || !name.trim() || !teacherCode.trim()}
+                      disabled={isLoading || !name.trim()}
                     >
                       <Text style={styles.createAccountButtonText}>
                         {isLoading ? 'Sending code...' : 'Create account'}

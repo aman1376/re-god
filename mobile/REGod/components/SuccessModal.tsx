@@ -7,6 +7,7 @@ interface SuccessModalProps {
   onContinue: () => void;
   title?: string;
   subtitle?: string;
+  message?: string;
   buttonText?: string;
   score?: number | null;
 }
@@ -18,6 +19,7 @@ export default function SuccessModal({
   onContinue, 
   title = "Nice work!",
   subtitle = "You've unlocked the next lesson!",
+  message,
   buttonText = "Continue",
   score = null
 }: SuccessModalProps) {
@@ -41,6 +43,11 @@ export default function SuccessModal({
             
             {/* Subtitle */}
             <Text style={styles.subtitle}>{subtitle}</Text>
+            
+            {/* Custom Message (if provided) */}
+            {message && (
+              <Text style={styles.message}>{message}</Text>
+            )}
             
             {/* Score Display */}
             {score !== null && (
@@ -97,6 +104,14 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 20,
     lineHeight: 22,
+  },
+  message: {
+    fontSize: 16,
+    color: 'white',
+    textAlign: 'center',
+    marginBottom: 20,
+    lineHeight: 22,
+    paddingHorizontal: 10,
   },
   scoreContainer: {
     backgroundColor: 'rgba(255, 255, 255, 0.2)',

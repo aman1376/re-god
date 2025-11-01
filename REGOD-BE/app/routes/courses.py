@@ -73,32 +73,12 @@ async def get_user_dashboard(
                 "is_continue_available": progress is not None and progress.progress_percentage > 0
             })
     
-    # For students, show only courses from teachers they have access to
+    # For students, show all courses (no access restrictions)
     elif current_user.get("role") == "student":
-        # Get teachers the student has access to via teacher assignments
-        assignments = db.query(TeacherAssignment).filter(
-            TeacherAssignment.student_id == user_uuid,
-            TeacherAssignment.active == True
-        ).all()
-        
-        teacher_ids = [assignment.teacher_id for assignment in assignments]
-        
-        # Get courses from these teachers
+        # Get all active courses
         teacher_courses = db.query(Course).filter(
-            Course.created_by.in_(teacher_ids)
-        ).all() if teacher_ids else []
-        
-        # Also include any courses the user has progress in (even if no teacher assigned yet)
-        progressed_course_ids = [uc.course_id for uc in db.query(UserCourseProgress).filter(
-            UserCourseProgress.user_id == user_uuid
-        ).all()]
-        progressed_courses = db.query(Course).filter(Course.id.in_(progressed_course_ids)).all() if progressed_course_ids else []
-        
-        # Combine unique courses by id
-        courses_by_id = {}
-        for c in teacher_courses + progressed_courses:
-            courses_by_id[c.id] = c
-        teacher_courses = list(courses_by_id.values())
+            Course.is_active == True
+        ).all()
         
         # Get user's course progress
         user_courses = db.query(UserCourseProgress).filter(
@@ -226,20 +206,7 @@ async def update_course_progress(
                 detail="Course not found"
             )
         
-        # For students, check if they have access to the teacher who created the course
-        if current_user.get("role") == "student":
-            user_uuid = uuid.UUID(current_user["id"])
-            has_access = db.query(TeacherAssignment).filter(
-                TeacherAssignment.student_id == user_uuid,
-                TeacherAssignment.teacher_id == course.created_by,
-                TeacherAssignment.active == True
-            ).first()
-            
-            if not has_access:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You don't have access to this course"
-                )
+        # No access restrictions - all authenticated users can access courses
         
         # Get total chapters in the course
         total_chapters = db.query(Chapter).filter(
@@ -321,6 +288,7 @@ async def complete_lesson(
         course_id = int(request_data.get("course_id"))
         module_id = int(request_data.get("module_id"))
         responses = request_data.get("responses", [])
+        quiz_score = request_data.get("quiz_score")  # Quiz score percentage (0-100)
         
         # Check if user has access to this course
         course = db.query(Course).filter(Course.id == course_id).first()
@@ -338,21 +306,6 @@ async def complete_lesson(
                 detail="Module not found"
             )
         
-        # For students, check if they have access to the teacher who created the course
-        if current_user.get("role") == "student":
-            user_uuid = uuid.UUID(current_user["id"])
-            has_access = db.query(TeacherAssignment).filter(
-                TeacherAssignment.student_id == user_uuid,
-                TeacherAssignment.teacher_id == course.created_by,
-                TeacherAssignment.active == True
-            ).first()
-            
-            if not has_access:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You don't have access to this course"
-                )
-        
         # Store quiz responses (if any)
         user_uuid = uuid.UUID(current_user["id"])
         for response in responses:
@@ -366,38 +319,51 @@ async def complete_lesson(
             )
             db.add(quiz_response)
         
-        # Mark module as completed
-        user_uuid = uuid.UUID(current_user["id"])
-        
         # Create or update module progress
         module_progress = db.query(UserModuleProgress).filter(
             UserModuleProgress.user_id == user_uuid,
             UserModuleProgress.module_id == module_id
         ).first()
         
+        # Determine status based on quiz score
+        # If quiz_score is provided and >= 60, mark as completed; otherwise mark as failed
+        if quiz_score is not None:
+            if quiz_score >= 60:
+                status_value = "completed"
+                completed_at = datetime.utcnow()
+            else:
+                status_value = "failed"
+                completed_at = None
+        else:
+            # If no quiz score provided, mark as completed (for backward compatibility)
+            status_value = "completed"
+            completed_at = datetime.utcnow()
+        
         if not module_progress:
             module_progress = UserModuleProgress(
                 user_id=user_uuid,
                 course_id=course_id,
                 module_id=module_id,
-                status="completed",
-                completed_at=datetime.utcnow()
+                status=status_value,
+                completed_at=completed_at,
+                quiz_score=quiz_score
             )
             db.add(module_progress)
         else:
-            module_progress.status = "completed"
-            module_progress.completed_at = datetime.utcnow()
+            module_progress.status = status_value
+            module_progress.completed_at = completed_at
+            module_progress.quiz_score = quiz_score
         
         db.commit()
         
-        # Update overall course progress
+        # Update overall course progress - only count completed modules (score >= 60)
         # Get total modules in the course
         total_modules = db.query(Module).filter(
             Module.course_id == course_id,
             Module.is_active == True
         ).count()
         
-        # Get completed modules for this user
+        # Get completed modules for this user (only those with status "completed")
         completed_modules = db.query(UserModuleProgress).filter(
             UserModuleProgress.user_id == user_uuid,
             UserModuleProgress.status == "completed",
@@ -444,6 +410,112 @@ async def complete_lesson(
             detail={"error": {"code": "INTERNAL_ERROR", "message": f"Internal server error: {str(e)}"}}
         )
 
+@router.get("/courses/{course_id}/modules/{module_id}/can-access")
+async def check_module_access(
+    course_id: int,
+    module_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Check if student can access a module based on previous module quiz score"""
+    try:
+        user_uuid = uuid.UUID(current_user["id"])
+        
+        # Validate course exists
+        course = db.query(Course).filter(Course.id == course_id).first()
+        if not course:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Course not found"
+            )
+        
+        # Validate module exists
+        module = db.query(Module).filter(Module.id == module_id, Module.course_id == course_id).first()
+        if not module:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Module not found"
+            )
+        
+        # Get all modules in the same chapter (or course if no chapter), ordered by order field
+        if module.chapter_id:
+            # Get modules in same chapter
+            all_modules = db.query(Module).filter(
+                Module.chapter_id == module.chapter_id,
+                Module.course_id == course_id,
+                Module.is_active == True
+            ).order_by(Module.order).all()
+        else:
+            # If no chapter, get all modules in course
+            all_modules = db.query(Module).filter(
+                Module.course_id == course_id,
+                Module.is_active == True
+            ).order_by(Module.order).all()
+        
+        # Find current module index
+        current_module_index = None
+        for idx, m in enumerate(all_modules):
+            if m.id == module_id:
+                current_module_index = idx
+                break
+        
+        if current_module_index is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Module not found in course structure"
+            )
+        
+        # First module is always accessible
+        if current_module_index == 0:
+            return {
+                "can_access": True,
+                "reason": "First module in chapter/course"
+            }
+        
+        # Get previous module
+        previous_module = all_modules[current_module_index - 1]
+        
+        # Check if previous module has been completed with score >= 60
+        previous_progress = db.query(UserModuleProgress).filter(
+            UserModuleProgress.user_id == user_uuid,
+            UserModuleProgress.module_id == previous_module.id
+        ).first()
+        
+        if not previous_progress:
+            return {
+                "can_access": False,
+                "reason": f"Previous module '{previous_module.title}' must be completed with 60% or higher to unlock this module"
+            }
+        
+        # Check if previous module has quiz_score >= 60
+        if previous_progress.quiz_score is None:
+            return {
+                "can_access": False,
+                "reason": f"Previous module '{previous_module.title}' must be completed with 60% or higher to unlock this module"
+            }
+        
+        if previous_progress.quiz_score >= 60:
+            return {
+                "can_access": True,
+                "reason": f"Previous module completed with score {previous_progress.quiz_score}%"
+            }
+        else:
+            return {
+                "can_access": False,
+                "reason": f"Previous module '{previous_module.title}' score ({previous_progress.quiz_score}%) is below 60%. Please retake the quiz to score 60% or higher."
+            }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        print(f"Error in check_module_access: {e}")
+        print(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": {"code": "INTERNAL_ERROR", "message": f"Internal server error: {str(e)}"}}
+        )
+
 @router.get("/courses/{course_id}/module-progress")
 async def get_module_progress(
     course_id: int,
@@ -462,19 +534,7 @@ async def get_module_progress(
                 detail="Course not found"
             )
         
-        # For students, check if they have access to the teacher who created the course
-        if current_user.get("role") == "student":
-            has_access = db.query(TeacherAssignment).filter(
-                TeacherAssignment.student_id == user_uuid,
-                TeacherAssignment.teacher_id == course.created_by,
-                TeacherAssignment.active == True
-            ).first()
-            
-            if not has_access:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You don't have access to this course"
-                )
+        # No access restrictions - all authenticated users can access courses
         
         # Get all modules for the course
         modules = db.query(Module).filter(
@@ -528,19 +588,7 @@ async def get_detailed_progress(
                 detail="Course not found"
             )
         
-        # For students, check if they have access to the teacher who created the course
-        if current_user.get("role") == "student":
-            has_access = db.query(TeacherAssignment).filter(
-                TeacherAssignment.student_id == user_uuid,
-                TeacherAssignment.teacher_id == course.created_by,
-                TeacherAssignment.active == True
-            ).first()
-            
-            if not has_access:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You don't have access to this course"
-                )
+        # No access restrictions - all authenticated users can access courses
         
         # Get all chapters in the course
         chapters = db.query(Chapter).filter(
@@ -664,19 +712,7 @@ async def get_chapter_progress(
                 detail="Course not found"
             )
         
-        # For students, check if they have access to the teacher who created the course
-        if current_user.get("role") == "student":
-            has_access = db.query(TeacherAssignment).filter(
-                TeacherAssignment.student_id == user_uuid,
-                TeacherAssignment.teacher_id == course.created_by,
-                TeacherAssignment.active == True
-            ).first()
-            
-            if not has_access:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You don't have access to this course"
-                )
+        # No access restrictions - all authenticated users can access courses
         
         # Get all chapters in the course
         chapters = db.query(Chapter).filter(
@@ -754,29 +790,23 @@ async def get_courses(
     db: Session = Depends(get_db)
 ):
     """Get all courses with pagination and access control"""
-    if current_user.get("role") == "admin":
+    # Check if user has admin role (works for users with multiple roles)
+    user_roles = current_user.get("roles", [])
+    is_admin = "admin" in user_roles or current_user.get("role") == "admin"
+    is_teacher = "teacher" in user_roles or current_user.get("role") == "teacher"
+    
+    if is_admin:
         # Admins can see all courses
         query = db.query(Course).filter(Course.is_active == True)
-    elif current_user.get("role") == "teacher":
+    elif is_teacher:
         # Teachers can see their own courses
         query = db.query(Course).filter(
             Course.created_by == current_user["id"],
             Course.is_active == True
         )
     else:
-        # Students can only see courses from teachers they have access to
-        access_records = db.query(TeacherAssignment).filter(
-            TeacherAssignment.student_id == current_user["id"],
-            TeacherAssignment.active == True
-        ).all()
-        
-        teacher_ids = [access.teacher_id for access in access_records]
-        
-        if not teacher_ids:
-            return create_paginated_response(items=[], total=0, page=page, items_per_page=items_per_page, has_next=False, has_prev=False)
-            
+        # Students can see all courses (no access restrictions)
         query = db.query(Course).filter(
-            Course.created_by.in_(teacher_ids),
             Course.is_active == True
         )
     
@@ -817,19 +847,7 @@ async def get_course_modules(
             detail="Course not found"
         )
     
-    # Check access for students
-    if current_user.get("role") == "student":
-        has_access = db.query(TeacherAssignment).filter(
-            TeacherAssignment.student_id == current_user["id"],
-            TeacherAssignment.teacher_id == course.created_by,
-            TeacherAssignment.active == True
-        ).first()
-        
-        if not has_access:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You don't have access to this course"
-            )
+    # No access restrictions - all authenticated users can view courses
     
     # Get modules for the course with pagination
     query = db.query(Module).filter(
@@ -871,7 +889,7 @@ async def get_course_modules(
 
 
 @router.post("/courses", response_model=CourseResponse)
-@require_role(["admin", "teacher"])
+@require_permission("content:upload")
 async def create_course(
     payload: CourseBase,
     current_user: dict = Depends(get_current_user),
@@ -902,7 +920,7 @@ async def create_course(
 
 
 @router.put("/courses/{course_id}", response_model=CourseResponse)
-@require_role(["admin", "teacher"])
+@require_permission("content:upload")
 async def update_course(
     course_id: int,
     payload: CourseBase,
@@ -912,8 +930,13 @@ async def update_course(
     course = db.query(Course).filter(Course.id == course_id).first()
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
+    
+    # Check roles properly (support users with multiple roles)
+    user_roles = current_user.get("roles", [])
+    is_admin = "admin" in user_roles or current_user.get("role") == "admin"
+    
     # Fix UUID comparison by converting both to strings
-    if current_user.get("role") != "admin" and str(course.created_by) != str(current_user["id"]):
+    if not is_admin and str(course.created_by) != str(current_user["id"]):
         raise HTTPException(status_code=403, detail="Not allowed")
 
     course.title = payload.title
@@ -937,7 +960,7 @@ async def update_course(
 
 
 @router.post("/courses/{course_id}/modules", response_model=ModuleResponse)
-@require_role(["admin", "teacher"])
+@require_permission("content:upload")
 async def create_module(
     course_id: int,
     payload: ModuleBase,
@@ -952,12 +975,18 @@ async def create_module(
     # Debug logging for permission check
     print(f"[DEBUG] Module creation permission check:")
     print(f"  Current user role: {current_user.get('role')}")
+    print(f"  Current user roles: {current_user.get('roles', [])}")
     print(f"  Current user ID: {current_user['id']} (type: {type(current_user['id'])})")
     print(f"  Course created_by: {course.created_by} (type: {type(course.created_by)})")
-    print(f"  Is admin: {current_user.get('role') == 'admin'}")
+    
+    # Check roles properly (support users with multiple roles)
+    user_roles = current_user.get("roles", [])
+    is_admin = "admin" in user_roles or current_user.get("role") == "admin"
+    
+    print(f"  Is admin: {is_admin}")
     print(f"  Is course creator: {str(course.created_by) == current_user['id']}")
     
-    if not current_user.get("role") == "admin" and str(course.created_by) != current_user["id"]:
+    if not is_admin and str(course.created_by) != current_user["id"]:
         print(f"[DEBUG] Permission denied - not admin and not course creator")
         raise HTTPException(status_code=403, detail="Not allowed")
 
@@ -1017,7 +1046,7 @@ async def create_module(
 
 
 @router.put("/courses/{course_id}/modules/{module_id}", response_model=ModuleResponse)
-@require_role(["admin", "teacher"])
+@require_permission("content:upload")
 async def update_module(
     course_id: int,
     module_id: int,
@@ -1036,13 +1065,19 @@ async def update_module(
     print(f"Update Module Permission Check Debug:")
     print(f"  User ID: {current_user.get('id')} (type: {type(current_user.get('id'))})")
     print(f"  User Role: {current_user.get('role')}")
+    print(f"  User Roles: {current_user.get('roles', [])}")
     print(f"  Course Created By: {course.created_by} (type: {type(course.created_by)})")
-    print(f"  Is Admin: {current_user.get('role') == 'admin'}")
+    
+    # Check roles properly (support users with multiple roles)
+    user_roles = current_user.get("roles", [])
+    is_admin = "admin" in user_roles or current_user.get("role") == "admin"
+    
+    print(f"  Is Admin: {is_admin}")
     print(f"  Is Course Owner (direct): {course.created_by == current_user['id']}")
     print(f"  Is Course Owner (string): {str(course.created_by) == str(current_user['id'])}")
     
     # Fix UUID comparison by converting both to strings
-    if current_user.get("role") != "admin" and str(course.created_by) != str(current_user["id"]):
+    if not is_admin and str(course.created_by) != str(current_user["id"]):
         raise HTTPException(status_code=403, detail="Not allowed")
 
     # Only update fields that are provided in the payload
@@ -1078,7 +1113,7 @@ async def update_module(
 
 
 @router.delete("/courses/{course_id}/modules/{module_id}")
-@require_role(["admin", "teacher"])
+@require_permission("content:upload")
 async def delete_module(
     course_id: int,
     module_id: int,
@@ -1094,8 +1129,12 @@ async def delete_module(
     if not module:
         raise HTTPException(status_code=404, detail="Module not found")
     
+    # Check roles properly (support users with multiple roles)
+    user_roles = current_user.get("roles", [])
+    is_admin = "admin" in user_roles or current_user.get("role") == "admin"
+    
     # Check permissions - only admins or course owner can delete
-    if current_user.get("role") != "admin" and str(course.created_by) != str(current_user["id"]):
+    if not is_admin and str(course.created_by) != str(current_user["id"]):
         raise HTTPException(status_code=403, detail="Not allowed")
     
     db.delete(module)
@@ -1104,7 +1143,7 @@ async def delete_module(
     return {"message": "Module deleted successfully"}
 
 @router.post("/courses/{course_id}/chapters", response_model=ChapterResponse)
-@require_role(["admin", "teacher"])
+@require_permission("content:upload")
 async def create_chapter(
     course_id: int,
     payload: ChapterBase,
@@ -1118,12 +1157,18 @@ async def create_chapter(
     # Debug logging for permission check
     print(f"[DEBUG] Chapter creation permission check:")
     print(f"  Current user role: {current_user.get('role')}")
+    print(f"  Current user roles: {current_user.get('roles', [])}")
     print(f"  Current user ID: {current_user['id']} (type: {type(current_user['id'])})")
     print(f"  Course created_by: {course.created_by} (type: {type(course.created_by)})")
-    print(f"  Is admin: {current_user.get('role') == 'admin'}")
+    
+    # Check roles properly (support users with multiple roles)
+    user_roles = current_user.get("roles", [])
+    is_admin = "admin" in user_roles or current_user.get("role") == "admin"
+    
+    print(f"  Is admin: {is_admin}")
     print(f"  Is course creator: {str(course.created_by) == current_user['id']}")
     
-    if not current_user.get("role") == "admin" and str(course.created_by) != current_user["id"]:
+    if not is_admin and str(course.created_by) != current_user["id"]:
         print(f"[DEBUG] Permission denied - not admin and not course creator")
         raise HTTPException(status_code=403, detail="Not allowed")
 
@@ -1172,7 +1217,7 @@ async def list_chapters(
 
 
 @router.put("/courses/{course_id}/chapters/{chapter_id}", response_model=ChapterResponse)
-@require_role(["admin", "teacher"])
+@require_permission("content:upload")
 async def update_chapter(
     course_id: int,
     chapter_id: int,
@@ -1184,8 +1229,13 @@ async def update_chapter(
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
     course = db.query(Course).filter(Course.id == course_id).first()
+    
+    # Check roles properly (support users with multiple roles)
+    user_roles = current_user.get("roles", [])
+    is_admin = "admin" in user_roles or current_user.get("role") == "admin"
+    
     # Fix UUID comparison by converting both to strings
-    if not course or (current_user.get("role") != "admin" and str(course.created_by) != str(current_user["id"])):
+    if not course or (not is_admin and str(course.created_by) != str(current_user["id"])):
         raise HTTPException(status_code=403, detail="Not allowed")
     chapter.title = payload.title
     chapter.cover_image_url = payload.cover_image_url
@@ -1204,7 +1254,11 @@ async def get_module_quiz_responses(
 ):
     """Check if a module has quiz responses"""
     # Check if user is teacher or admin
-    if current_user.get("role") not in ["teacher", "admin"]:
+    user_roles = current_user.get("roles", [])
+    is_admin = "admin" in user_roles or current_user.get("role") == "admin"
+    is_teacher = "teacher" in user_roles or current_user.get("role") == "teacher"
+    
+    if not is_admin and not is_teacher:
         raise HTTPException(status_code=403, detail="Access denied")
     
     # Check if module exists and user has access
@@ -1214,7 +1268,7 @@ async def get_module_quiz_responses(
     
     # Check permissions - only admins or course owner can access
     course = db.query(Course).filter(Course.id == course_id).first()
-    if current_user.get("role") != "admin" and str(course.created_by) != str(current_user["id"]):
+    if not is_admin and str(course.created_by) != str(current_user["id"]):
         raise HTTPException(status_code=403, detail="Not allowed")
     
     # Count quiz responses for this module
@@ -1238,8 +1292,13 @@ async def get_quiz_responses(
     limit: int = 20
 ):
     """Get quiz responses from students for teachers/admins"""
+    # Check roles properly (support users with multiple roles)
+    user_roles = current_user.get("roles", [])
+    is_admin = "admin" in user_roles or current_user.get("role") == "admin"
+    is_teacher = "teacher" in user_roles or current_user.get("role") == "teacher"
+    
     # Check if user is teacher or admin
-    if current_user.get("role") not in ["teacher", "admin"]:
+    if not is_admin and not is_teacher:
         raise HTTPException(status_code=403, detail="Access denied")
     
     teacher_uuid = uuid.UUID(current_user["id"])

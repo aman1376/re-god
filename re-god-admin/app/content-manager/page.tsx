@@ -203,24 +203,28 @@ export default function ContentManagerPage() {
 
   return (
     <AdminLayout>
-      <div className="p-6 space-y-6">
+      <div className="p-4 md:p-6 space-y-4 md:space-y-6 max-w-7xl mx-auto">
         {/* Header with Course Carousel */}
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h1 className="text-3xl font-bold text-gray-900">Content Manager</h1>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Content Manager</h1>
             <ContentManagerModal
               mode="create"
               contentType="course"
               onSuccess={fetchCourses}
-              triggerButton={<Button className="bg-red-800 hover:bg-red-900"><Plus className="w-4 h-4 mr-2" />New Course</Button>}
+              triggerButton={
+                <Button className="bg-red-800 hover:bg-red-900 w-full sm:w-auto">
+                  <Plus className="w-4 h-4 mr-2" />New Course
+                </Button>
+              }
             />
           </div>
 
           {/* Course Carousel */}
           {courses.length > 0 && (
-            <div className="relative bg-white rounded-xl shadow-lg p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xl font-semibold text-gray-800">Courses</h2>
+            <div className="relative bg-white rounded-xl shadow-lg p-4 md:p-6">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+                <h2 className="text-lg md:text-xl font-semibold text-gray-800">Courses</h2>
                 <div className="flex gap-2">
                   <Button
                     variant="outline"
@@ -248,9 +252,9 @@ export default function ContentManagerPage() {
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: -100 }}
                   transition={{ duration: 0.3 }}
-                  className="flex items-center gap-6"
+                  className="flex flex-col sm:flex-row items-center gap-4 md:gap-6"
                 >
-                  <div className="w-48 h-32 bg-gray-200 rounded-lg overflow-hidden flex-shrink-0">
+                  <div className="w-full sm:w-48 h-32 bg-gray-200 rounded-lg overflow-hidden flex-shrink-0">
                     {selectedCourse?.thumbnail_url ? (
                       <img
                         src={AdminApiService.getUploadUrl(selectedCourse.thumbnail_url)}
@@ -263,8 +267,8 @@ export default function ContentManagerPage() {
                       </div>
                     )}
                   </div>
-                  <div className="flex-1">
-                    <h3 className="text-2xl font-bold text-gray-900">{selectedCourse?.title}</h3>
+                  <div className="flex-1 text-center sm:text-left">
+                    <h3 className="text-xl md:text-2xl font-bold text-gray-900 break-words">{selectedCourse?.title}</h3>
                     <p className="text-sm text-gray-500 mt-1">{chapters.length} chapters • {modules.length} lessons</p>
                   </div>
                 </motion.div>
@@ -302,26 +306,30 @@ export default function ContentManagerPage() {
               exit={{ opacity: 0, y: -20 }}
               transition={{ duration: 0.3 }}
             >
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-2xl font-semibold text-gray-800">Chapters</h2>
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+                <h2 className="text-xl md:text-2xl font-semibold text-gray-800">Chapters</h2>
                 {selectedCourseId && (
                   <ContentManagerModal
                     mode="create"
                     contentType="module"
                     courseId={selectedCourseId}
                     onSuccess={() => fetchModules(selectedCourseId)}
-                    triggerButton={<Button className="bg-blue-600 hover:bg-blue-700"><Plus className="w-4 h-4 mr-2" />New Lesson</Button>}
+                    triggerButton={
+                      <Button className="bg-blue-600 hover:bg-blue-700 w-full sm:w-auto">
+                        <Plus className="w-4 h-4 mr-2" />New Lesson
+                      </Button>
+                    }
                   />
                 )}
               </div>
 
               {chapters.length === 0 ? (
-                <Card className="p-12 text-center">
-                  <BookOpen className="w-16 h-16 mx-auto text-gray-400 mb-4" />
+                <Card className="p-8 md:p-12 text-center">
+                  <BookOpen className="w-12 md:w-16 h-12 md:h-16 mx-auto text-gray-400 mb-4" />
                   <p className="text-gray-500">No chapters yet. Create lessons to get started.</p>
                 </Card>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-6">
                   {chapters.sort((a, b) => a.order - b.order).map((chapter, index) => (
                     <motion.div
                       key={chapter.id}
@@ -353,7 +361,7 @@ export default function ContentManagerPage() {
                           </div>
                         </div>
                         <CardContent className="p-4">
-                          <h3 className="font-semibold text-lg text-gray-900 line-clamp-2 mb-2">{chapter.title}</h3>
+                          <h3 className="font-semibold text-base md:text-lg text-gray-900 line-clamp-2 mb-2">{chapter.title}</h3>
                           <p className="text-sm text-gray-500">
                             {modules.filter(m => m.chapter_id === chapter.id).length} lessons
                           </p>
@@ -374,24 +382,24 @@ export default function ContentManagerPage() {
               transition={{ duration: 0.3 }}
               className="space-y-4"
             >
-              <div className="flex items-center gap-4">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
                 <Button
                   variant="outline"
                   onClick={handleBackToChapters}
-                  className="flex items-center gap-2"
+                  className="flex items-center gap-2 w-full sm:w-auto"
                 >
                   <ChevronLeft className="w-4 h-4" />
                   Back to Chapters
                 </Button>
-                <div>
-                  <h2 className="text-2xl font-semibold text-gray-800">{selectedChapter.title}</h2>
+                <div className="flex-1">
+                  <h2 className="text-xl md:text-2xl font-semibold text-gray-800">{selectedChapter.title}</h2>
                   <p className="text-sm text-gray-500">{chapterModules.length} lessons</p>
                 </div>
               </div>
 
               {chapterModules.length === 0 ? (
-                <Card className="p-12 text-center">
-                  <BookOpen className="w-16 h-16 mx-auto text-gray-400 mb-4" />
+                <Card className="p-8 md:p-12 text-center">
+                  <BookOpen className="w-12 md:w-16 h-12 md:h-16 mx-auto text-gray-400 mb-4" />
                   <p className="text-gray-500">No lessons in this chapter yet.</p>
                 </Card>
               ) : (
@@ -405,10 +413,10 @@ export default function ContentManagerPage() {
                     >
                       {editingModule?.id === module.id ? (
                         // Edit Form
-                        <Card className="p-6">
+                        <Card className="p-4 md:p-6">
                           <div className="space-y-4">
                             <div className="flex items-center justify-between mb-4">
-                              <h3 className="text-lg font-semibold">Edit Lesson</h3>
+                              <h3 className="text-base md:text-lg font-semibold">Edit Lesson</h3>
                               <Button
                                 variant="outline"
                                 size="sm"
@@ -418,7 +426,7 @@ export default function ContentManagerPage() {
                               </Button>
                             </div>
 
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                               <div>
                                 <Label>Title</Label>
                                 <Input
@@ -584,16 +592,17 @@ export default function ContentManagerPage() {
                               </div>
                             </div>
 
-                            <div className="flex gap-2 pt-4">
+                            <div className="flex flex-col sm:flex-row gap-2 pt-4">
                               <Button
                                 onClick={handleSaveModule}
-                                className="bg-green-600 hover:bg-green-700"
+                                className="bg-green-600 hover:bg-green-700 w-full sm:w-auto"
                               >
                                 Save Changes
                               </Button>
                               <Button
                                 variant="outline"
                                 onClick={() => setEditingModule(null)}
+                                className="w-full sm:w-auto"
                               >
                                 Cancel
                               </Button>
@@ -655,7 +664,7 @@ export default function ContentManagerPage() {
                                 )}
                               </div>
 
-                              <div className="flex gap-2 mt-4 pt-4 border-t">
+                              <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t">
                                 <Button
                                   variant="outline"
                                   size="sm"
@@ -761,9 +770,9 @@ function QuizQuestionEditor({
 
   return (
     <Card className="border-l-4 border-l-blue-500">
-      <CardContent className="p-4">
+      <CardContent className="p-3 md:p-4">
         <div className="flex items-center justify-between mb-4">
-          <h5 className="font-semibold text-gray-900">Question {index + 1}</h5>
+          <h5 className="font-semibold text-sm md:text-base text-gray-900">Question {index + 1}</h5>
           {!disabled && (
             <Button
               type="button"
@@ -777,15 +786,15 @@ function QuizQuestionEditor({
           )}
         </div>
 
-        <div className="space-y-4">
+        <div className="space-y-3 md:space-y-4">
           {/* Question Type */}
           <div>
-            <Label>Question Type</Label>
+            <Label className="text-sm">Question Type</Label>
             <select
               value={question.type}
               onChange={(e) => handleTypeChange(e.target.value as QuizQuestion['type'])}
               disabled={disabled}
-              className={`w-full border rounded px-3 py-2 ${disabled ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+              className={`w-full border rounded px-3 py-2 text-sm md:text-base ${disabled ? 'bg-gray-100 cursor-not-allowed' : ''}`}
             >
               <option value="multiple_choice">Multiple Choice</option>
               <option value="true_false">True/False</option>
@@ -795,21 +804,21 @@ function QuizQuestionEditor({
 
           {/* Question Text */}
           <div>
-            <Label>Question</Label>
+            <Label className="text-sm">Question</Label>
             <Textarea
               value={question.question}
               onChange={(e) => onUpdate({ question: e.target.value })}
               placeholder="Enter your question here..."
               rows={2}
               disabled={disabled}
-              className={disabled ? 'bg-gray-100 cursor-not-allowed' : ''}
+              className={`text-sm md:text-base ${disabled ? 'bg-gray-100 cursor-not-allowed' : ''}`}
             />
           </div>
 
           {/* Options (for multiple choice and true/false) */}
           {question.type !== 'short_answer' && question.options && (
             <div>
-              <Label>Answer Options</Label>
+              <Label className="text-sm">Answer Options</Label>
               <div className="space-y-2">
                 {question.options.map((option, optionIndex) => (
                   <div key={optionIndex} className="flex items-center gap-2">
@@ -819,13 +828,13 @@ function QuizQuestionEditor({
                       checked={question.correctAnswer === optionIndex.toString()}
                       onChange={() => onUpdate({ correctAnswer: optionIndex.toString() })}
                       disabled={disabled}
-                      className={`text-blue-600 ${disabled ? 'cursor-not-allowed' : ''}`}
+                      className={`text-blue-600 flex-shrink-0 ${disabled ? 'cursor-not-allowed' : ''}`}
                     />
                     <Input
                       value={option}
                       onChange={(e) => onUpdateOptions(optionIndex, e.target.value)}
                       placeholder={`Option ${optionIndex + 1}`}
-                      className={`flex-1 ${disabled ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                      className={`flex-1 text-sm md:text-base ${disabled ? 'bg-gray-100 cursor-not-allowed' : ''}`}
                       disabled={disabled}
                     />
                     {question.options && question.options.length > 2 && !disabled && (
@@ -834,7 +843,7 @@ function QuizQuestionEditor({
                         variant="ghost"
                         size="sm"
                         onClick={() => removeOption(optionIndex)}
-                        className="text-red-600 hover:text-red-800"
+                        className="text-red-600 hover:text-red-800 flex-shrink-0"
                       >
                         <X className="w-4 h-4" />
                       </Button>
@@ -847,7 +856,7 @@ function QuizQuestionEditor({
                     variant="outline"
                     size="sm"
                     onClick={addOption}
-                    className="mt-2"
+                    className="mt-2 w-full sm:w-auto"
                   >
                     <Plus className="w-4 h-4 mr-2" />
                     Add Option
@@ -859,19 +868,19 @@ function QuizQuestionEditor({
 
           {/* Explanation */}
           <div>
-            <Label>Explanation (Optional)</Label>
+            <Label className="text-sm">Explanation (Optional)</Label>
             <Textarea
               value={question.explanation || ''}
               onChange={(e) => onUpdate({ explanation: e.target.value })}
               placeholder="Explain why this is the correct answer..."
               rows={2}
               disabled={disabled}
-              className={disabled ? 'bg-gray-100 cursor-not-allowed' : ''}
+              className={`text-sm md:text-base ${disabled ? 'bg-gray-100 cursor-not-allowed' : ''}`}
             />
           </div>
 
           {/* Question Type Indicators */}
-          <div className="text-xs text-gray-500">
+          <div className="text-xs md:text-sm text-gray-500">
             {question.type === 'multiple_choice' && (
               <div className="p-2 bg-blue-50 border border-blue-200 rounded">
                 <div className="flex items-center gap-2">

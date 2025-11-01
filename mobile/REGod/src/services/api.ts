@@ -870,15 +870,22 @@ class ApiService {
   }
 
   // New endpoint for marking lessons as completed with responses
-  static async completeLesson(courseId: number, moduleId: number, responses: any[]) {
+  static async completeLesson(courseId: number, moduleId: number, responses: any[], quizScore?: number) {
     return this.makeAuthenticatedRequest('/learn/complete-lesson', {
       method: 'POST',
       body: JSON.stringify({
         course_id: String(courseId),
         module_id: String(moduleId),
         responses,
+        quiz_score: quizScore,
         completed_at: new Date().toISOString(),
       }),
+    });
+  }
+
+  static async checkModuleAccess(courseId: number, moduleId: number): Promise<{ can_access: boolean; reason: string }> {
+    return this.makeAuthenticatedRequest(`/courses/${courseId}/modules/${moduleId}/can-access`, {
+      method: 'GET',
     });
   }
 
@@ -1527,22 +1534,23 @@ class ApiService {
   }
 
   static async getTeacherCode(): Promise<{ teacher_code: string; is_active: boolean; use_count: number; max_uses: number }> {
-    const codes = await this.makeAuthenticatedRequest<any[]>('/teacher-codes', {
+    const response = await this.makeAuthenticatedRequest<{
+      teacher_user_id: string;
+      teacher_code: string;
+      is_active: boolean;
+      use_count: number;
+      max_uses: number;
+      expires_at: string | null;
+    }>('/admin/my-code', {
       method: 'GET',
     });
     
-    // Return the first active teacher code
-    if (codes && Array.isArray(codes) && codes.length > 0) {
-      const activeCode = codes.find((code: any) => code.is_active) || codes[0];
-      return {
-        teacher_code: activeCode.code,
-        is_active: activeCode.is_active,
-        use_count: activeCode.use_count,
-        max_uses: activeCode.max_uses
-      };
-    }
-    
-    throw new Error('No teacher codes found');
+    return {
+      teacher_code: response.teacher_code,
+      is_active: response.is_active,
+      use_count: response.use_count,
+      max_uses: response.max_uses
+    };
   }
 
   static async getStoredToken(): Promise<string | null> {

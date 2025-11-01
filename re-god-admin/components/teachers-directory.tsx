@@ -5,6 +5,7 @@ import { Plus, Trash2, Search, X, User, Mail, Phone, Calendar, Hash } from "luci
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
 import { TeacherInviteForm } from "./teacher-invite-form"
 import AdminApiService, { type Teacher } from "@/lib/api"
 import { useAuth } from "@/contexts/auth-context"
@@ -23,6 +24,8 @@ export function TeachersDirectory() {
   const [showSearch, setShowSearch] = useState(false)
   const [selectedTeacher, setSelectedTeacher] = useState<Teacher | null>(null)
   const [showModal, setShowModal] = useState(false)
+  const [uploadPermissions, setUploadPermissions] = useState<Record<string, boolean>>({})
+  const [updatingPermissions, setUpdatingPermissions] = useState<Record<string, boolean>>({})
 
   // Check if user has admin permissions
   const isAdmin = user?.roles?.includes('admin') || user?.role === 'admin'
@@ -36,6 +39,14 @@ export function TeachersDirectory() {
       setPage(data.page)
       setTotalPages(data.total_pages)
       setTotal(data.total)
+      
+      // Initialize upload permissions based on actual permission state from backend
+      const permissions: Record<string, boolean> = {}
+      data.items.forEach((teacher) => {
+        // Use can_upload from backend, default to false for new teachers
+        permissions[teacher.id] = teacher.can_upload ?? false
+      })
+      setUploadPermissions(permissions)
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to fetch teachers';
       setError(errorMessage);
@@ -64,6 +75,40 @@ export function TeachersDirectory() {
 
   const handleInviteSuccess = () => {
     fetchTeachers(1) // Refresh the list from page 1
+  }
+
+  const handleToggleUploadPermission = async (teacherId: string, enabled: boolean) => {
+    if (!isAdmin) return
+    
+    setUpdatingPermissions(prev => ({ ...prev, [teacherId]: true }))
+    try {
+      await AdminApiService.toggleTeacherUploadPermission(teacherId, enabled)
+      setUploadPermissions(prev => ({ ...prev, [teacherId]: enabled }))
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to toggle upload permission';
+      alert(errorMessage)
+      // Revert the toggle on error
+      setUploadPermissions(prev => ({ ...prev, [teacherId]: !enabled }))
+    } finally {
+      setUpdatingPermissions(prev => ({ ...prev, [teacherId]: false }))
+    }
+  }
+
+  const handleDeleteTeacher = async (teacherId: string, teacherName: string) => {
+    if (!isAdmin) return
+    
+    if (!confirm(`Are you sure you want to delete ${teacherName}? This will reassign their students to an admin.`)) {
+      return
+    }
+
+    try {
+      await AdminApiService.deleteUser(teacherId)
+      // Refresh the list
+      fetchTeachers(page)
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to delete teacher';
+      alert(errorMessage)
+    }
   }
 
   return (
@@ -110,9 +155,10 @@ export function TeachersDirectory() {
                 </div>
               ) : (
                 filteredTeachers.map((teacher) => (
-                  <div key={teacher.id} className="flex items-center justify-between">
+                  <div key={teacher.id} className="flex items-center gap-4 py-2">
+                    {/* Left: Avatar and Info - Fixed width to ensure alignment */}
                     <div 
-                      className="flex items-center space-x-3 cursor-pointer hover:bg-gray-50 p-2 rounded transition-colors"
+                      className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer hover:bg-gray-50 p-2 rounded transition-colors"
                       onClick={() => {
                         setSelectedTeacher(teacher)
                         setShowModal(true)
@@ -121,20 +167,46 @@ export function TeachersDirectory() {
                       <img 
                         src={teacher.avatar_url || "/placeholder.svg"} 
                         alt={teacher.name} 
-                        className="w-8 h-8 rounded-full" 
+                        className="w-10 h-10 rounded-full flex-shrink-0" 
                       />
-                      <div>
-                        <span className="text-sm font-medium text-gray-900">{teacher.name}</span>
-                        <div className="text-xs text-gray-500">{teacher.email}</div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-medium text-gray-900 truncate">{teacher.name}</div>
+                        <div className="text-xs text-gray-500 truncate">{teacher.email}</div>
                       </div>
                     </div>
-                    <div className="flex space-x-1">
-                      <span className={`text-xs px-2 py-1 rounded ${
+                    
+                    {/* Right: Actions - Fixed width elements for consistent alignment */}
+                    <div className="flex items-center gap-3 flex-shrink-0">
+                      {/* Upload Permission Toggle */}
+                      {isAdmin && (
+                        <div className="flex items-center gap-2">
+                          <label className="text-xs text-gray-600 whitespace-nowrap">Upload</label>
+                          <Switch
+                            checked={uploadPermissions[teacher.id] ?? false}
+                            onCheckedChange={(checked) => handleToggleUploadPermission(teacher.id, checked)}
+                            disabled={updatingPermissions[teacher.id]}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        </div>
+                      )}
+                      
+                      {/* Active Badge - Fixed width */}
+                      <span className={`text-xs px-3 py-1 rounded whitespace-nowrap ${
                         teacher.is_active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
                       }`}>
                         {teacher.is_active ? 'Active' : 'Inactive'}
                       </span>
-                      <Button variant="ghost" size="sm" className="text-red-600 hover:text-red-800">
+                      
+                      {/* Delete Button - Fixed width */}
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="text-red-600 hover:text-red-800 hover:bg-red-50 w-8 h-8 p-0 flex items-center justify-center"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleDeleteTeacher(teacher.id, teacher.name)
+                        }}
+                      >
                         <Trash2 className="w-4 h-4" />
                       </Button>
                     </div>
