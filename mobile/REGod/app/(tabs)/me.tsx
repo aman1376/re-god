@@ -40,7 +40,7 @@ export default function MeScreen() {
   useEffect(() => {
     const fetchRecentNotes = async () => {
       try {
-        const notes = await ApiService.getNotes();
+        const notes = await ApiService.getAllNotes();
         setRecentNotes(notes.slice(0, 3));
       } catch (error) {
         console.error("Failed to fetch recent notes:", error);
@@ -226,11 +226,13 @@ export default function MeScreen() {
   const uploadProfileImage = async (imageUri: string) => {
     setIsUploadingImage(true);
     try {
-      // Upload the image to the server
+      // Upload the image to the server using backend service role key
       const uploadResult = await ApiService.uploadProfilePicture(imageUri);
       
+      console.log('Upload result:', uploadResult);
+      
       // Update local state with the server URL
-      setProfileImage(uploadResult.public_url);
+      setProfileImage(uploadResult.avatar_url);
       
       // Refresh user data in auth context to get updated user info and avatar
       try {
@@ -249,7 +251,7 @@ export default function MeScreen() {
         }
       }
       
-      Alert.alert('Success', 'Profile picture updated successfully!');
+      Alert.alert('Success', uploadResult.message || 'Profile picture updated successfully!');
     } catch (error) {
       console.error('Error uploading profile image:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';

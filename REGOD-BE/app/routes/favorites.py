@@ -1,13 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List
 import uuid
 
 from app.database import get_db
 from app.models import User, UserFavorite, UserChapterFavorite, Module, Chapter, UserModuleProgress
-from app.schemas import FavoriteResponse, ChapterFavoriteResponse
+from app.schemas import FavoriteResponse, ChapterFavoriteResponse, PaginatedResponse
 from app.utils.auth import get_current_user
 from app.rbac import require_permission
+from app.utils.pagination import paginate, create_paginated_response
 
 router = APIRouter()
 
@@ -65,36 +66,34 @@ async def toggle_favorite(
         db.refresh(new_favorite)
         return {"action": "added", "lesson_id": lesson_id}
 
-@router.get("/favourites", response_model=List[FavoriteResponse])
+@router.get("/favourites")
 async def get_favorites(
+    page: int = Query(1, ge=1),
+    items_per_page: int = Query(50, ge=1, le=100),
     current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db),
-    page: int = 1,
-    limit: int = 20
+    db: Session = Depends(get_db)
 ):
-    """Get user's favorite lessons"""
-    # Calculate offset
-    offset = (page - 1) * limit
+    """Get user's favorite lessons with pagination"""
+    # Build query
+    query = db.query(UserFavorite).filter(UserFavorite.user_id == current_user["id"])
     
-    # Get user's favorites
-    favorites = db.query(UserFavorite).filter(
-        UserFavorite.user_id == current_user.id
-    ).offset(offset).limit(limit).all()
+    # Apply pagination
+    items, total, page, items_per_page, has_next, has_prev = paginate(query, page, items_per_page)
     
-    # Prepare response
+    # Format response
     response = []
-    for fav in favorites:
-        response.append(FavoriteResponse(
-            id=fav.id,
-            user_id=fav.user_id,
-            lesson_id=fav.lesson_id,
-            created_at=fav.created_at,
-            lesson_title=fav.lesson.title,
-            course_title=fav.lesson.course.title,
-            thumbnail_url=fav.lesson.course.thumbnail_url
-        ))
+    for fav in items:
+        response.append({
+            "id": fav.id,
+            "user_id": str(fav.user_id),
+            "lesson_id": fav.lesson_id,
+            "created_at": fav.created_at.isoformat() if fav.created_at else None,
+            "lesson_title": fav.lesson.title if fav.lesson else "Unknown",
+            "course_title": fav.lesson.course.title if fav.lesson and fav.lesson.course else "Unknown",
+            "thumbnail_url": fav.lesson.course.thumbnail_url if fav.lesson and fav.lesson.course else None
+        })
     
-    return response
+    return create_paginated_response(items=response, total=total, page=page, items_per_page=items_per_page, has_next=has_next, has_prev=has_prev)
 
 @router.delete("/favourites/{favorite_id}")
 async def delete_favorite(
@@ -178,29 +177,28 @@ async def toggle_chapter_favorite(
         return {"action": "added", "chapter_id": chapter_id}
 
 
-@router.get("/chapter-favourites", response_model=List[ChapterFavoriteResponse])
+@router.get("/chapter-favourites")
 async def get_chapter_favorites(
+    page: int = Query(1, ge=1),
+    items_per_page: int = Query(50, ge=1, le=100),
     current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db),
-    page: int = 1,
-    limit: int = 20
+    db: Session = Depends(get_db)
 ):
-    """Get user's favorite chapters with progress information"""
+    """Get user's favorite chapters with pagination and progress information"""
     import uuid
     from sqlalchemy import func
     
-    # Calculate offset
-    offset = (page - 1) * limit
     user_uuid = uuid.UUID(current_user["id"])
     
-    # Get user's chapter favorites with progress data
-    favorites = db.query(UserChapterFavorite).filter(
-        UserChapterFavorite.user_id == user_uuid
-    ).offset(offset).limit(limit).all()
+    # Build query
+    query = db.query(UserChapterFavorite).filter(UserChapterFavorite.user_id == user_uuid)
     
-    # Prepare response with progress information
+    # Apply pagination
+    items, total, page, items_per_page, has_next, has_prev = paginate(query, page, items_per_page)
+    
+    # Format response with progress information
     response = []
-    for fav in favorites:
+    for fav in items:
         chapter = fav.chapter
         course = chapter.course
         
@@ -222,21 +220,21 @@ async def get_chapter_favorites(
         
         progress_percentage = (completed_modules / total_modules * 100) if total_modules > 0 else 0
         
-        response.append(ChapterFavoriteResponse(
-            id=fav.id,
-            user_id=str(fav.user_id),
-            chapter_id=fav.chapter_id,
-            course_id=chapter.course_id,
-            created_at=fav.created_at,
-            chapter_title=chapter.title,
-            course_title=course.title,
-            cover_image_url=chapter.cover_image_url,
-            progress_percentage=progress_percentage,
-            completed_modules=completed_modules,
-            total_modules=total_modules
-        ))
+        response.append({
+            "id": fav.id,
+            "user_id": str(fav.user_id),
+            "chapter_id": fav.chapter_id,
+            "course_id": chapter.course_id,
+            "created_at": fav.created_at.isoformat() if fav.created_at else None,
+            "chapter_title": chapter.title,
+            "course_title": course.title,
+            "cover_image_url": chapter.cover_image_url,
+            "progress_percentage": round(progress_percentage, 1),
+            "completed_modules": completed_modules,
+            "total_modules": total_modules
+        })
     
-    return response
+    return create_paginated_response(items=response, total=total, page=page, items_per_page=items_per_page, has_next=has_next, has_prev=has_prev)
 
 
 @router.delete("/chapter-favourites/{favorite_id}")

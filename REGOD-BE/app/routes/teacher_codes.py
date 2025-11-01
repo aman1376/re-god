@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List
 import secrets
@@ -9,10 +9,11 @@ from app.database import get_db
 from app.models import User, TeacherCode, TeacherCodeUse, TeacherAssignment
 from app.schemas import (
     TeacherCodeCreate, TeacherCodeResponse, TeacherCodeUseRequest, 
-    TeacherCodeUseResponse, StudentAccessResponse
+    TeacherCodeUseResponse, StudentAccessResponse, PaginatedResponse
 )
 from app.utils.auth import get_current_user
 from app.rbac import require_permission, require_role
+from app.utils.pagination import paginate, create_paginated_response
 
 router = APIRouter()
 
@@ -73,32 +74,34 @@ async def create_teacher_code(
         is_active=teacher_code.is_active
     )
 
-@router.get("/teacher-codes", response_model=List[TeacherCodeResponse])
+@router.get("/teacher-codes")
 @require_role("teacher")
 async def get_teacher_codes(
+    page: int = Query(1, ge=1),
+    items_per_page: int = Query(50, ge=1, le=100),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get all teacher codes for the current teacher"""
-    teacher_codes = db.query(TeacherCode).filter(
-        TeacherCode.teacher_id == current_user["id"]
-    ).all()
+    """Get all teacher codes for the current teacher with pagination"""
+    query = db.query(TeacherCode).filter(TeacherCode.teacher_id == current_user["id"])
+    
+    items, total, page, items_per_page, has_next, has_prev = paginate(query, page, items_per_page)
     
     response = []
-    for code in teacher_codes:
-        response.append(TeacherCodeResponse(
-            id=code.id,
-            code=code.code,
-            teacher_id=str(code.teacher_id),
-            teacher_name=current_user["name"],
-            created_at=code.created_at,
-            max_uses=code.max_uses,
-            expires_at=code.expires_at,
-            use_count=code.use_count,
-            is_active=code.is_active
-        ))
+    for code in items:
+        response.append({
+            "id": code.id,
+            "code": code.code,
+            "teacher_id": str(code.teacher_id),
+            "teacher_name": current_user["name"],
+            "created_at": code.created_at.isoformat() if code.created_at else None,
+            "max_uses": code.max_uses,
+            "expires_at": code.expires_at.isoformat() if code.expires_at else None,
+            "use_count": code.use_count,
+            "is_active": code.is_active
+        })
     
-    return response
+    return create_paginated_response(items=response, total=total, page=page, items_per_page=items_per_page, has_next=has_next, has_prev=has_prev)
 
 @router.post("/use-teacher-code", response_model=TeacherCodeUseResponse)
 async def use_teacher_code(
@@ -251,30 +254,34 @@ async def use_teacher_code(
         teacher_name=teacher.name if teacher else "Unknown Teacher"
     )
 
-@router.get("/student-access", response_model=List[StudentAccessResponse])
+@router.get("/student-access")
 async def get_student_access(
+    page: int = Query(1, ge=1),
+    items_per_page: int = Query(50, ge=1, le=100),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get all teachers that the current student has access to"""
-    access_records = db.query(TeacherAssignment).filter(
+    """Get all teachers that the current student has access to with pagination"""
+    query = db.query(TeacherAssignment).filter(
         TeacherAssignment.student_id == current_user["id"],
         TeacherAssignment.active == True
-    ).all()
+    )
+    
+    items, total, page, items_per_page, has_next, has_prev = paginate(query, page, items_per_page)
     
     response = []
-    for access in access_records:
+    for access in items:
         teacher = db.query(User).filter(User.id == access.teacher_id).first()
-        response.append(StudentAccessResponse(
-            student_id=access.student_id,
-            student_name=current_user["name"],
-            teacher_id=access.teacher_id,
-            teacher_name=teacher.name if teacher else "Unknown Teacher",
-            granted_at=access.granted_at,
-            is_active=access.is_active
-        ))
+        response.append({
+            "student_id": str(access.student_id),
+            "student_name": current_user["name"],
+            "teacher_id": str(access.teacher_id),
+            "teacher_name": teacher.name if teacher else "Unknown Teacher",
+            "granted_at": access.assigned_at.isoformat() if access.assigned_at else None,
+            "is_active": access.active
+        })
     
-    return response
+    return create_paginated_response(items=response, total=total, page=page, items_per_page=items_per_page, has_next=has_next, has_prev=has_prev)
 
 @router.get("/check-teacher-assignment")
 async def check_teacher_assignment(

@@ -1,13 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List
 import uuid
 
 from app.database import get_db
 from app.models import User, UserNote, Course, Module, TeacherAssignment, Role
-from app.schemas import UserResponse, UserProfileUpdate, NoteBase, NoteResponse, ShareCourseResponse
+from app.schemas import UserResponse, UserProfileUpdate, NoteBase, NoteResponse, ShareCourseResponse, PaginatedResponse
 from app.utils.auth import get_current_user
 from app.rbac import require_permission
+from app.utils.pagination import paginate, create_paginated_response
 
 router = APIRouter()
 
@@ -100,34 +101,36 @@ async def update_user_profile(
         roles=[role.name for role in user.roles] if user.roles else []
     )
 
-@router.get("/notes", response_model=List[NoteResponse])
+@router.get("/notes")
 async def get_user_notes(
+    page: int = Query(1, ge=1),
+    items_per_page: int = Query(50, ge=1, le=100),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get all notes for the current user"""
+    """Get all notes for the current user with pagination"""
     user_id = uuid.UUID(current_user["id"])
-    notes = db.query(UserNote).filter(
-        UserNote.user_id == user_id
-    ).all()
+    query = db.query(UserNote).filter(UserNote.user_id == user_id)
+    
+    items, total, page, items_per_page, has_next, has_prev = paginate(query, page, items_per_page)
     
     response = []
-    for note in notes:
+    for note in items:
         course = db.query(Course).filter(Course.id == note.course_id).first()
         lesson = db.query(Module).filter(Module.id == note.lesson_id).first()
         
-        response.append(NoteResponse(
-            id=note.id,
-            user_id=str(note.user_id),
-            title=note.title,
-            content=note.content,
-            course_id=note.course_id,
-            lesson_id=note.lesson_id,
-            created_at=note.created_at,
-            updated_at=note.updated_at or note.created_at
-        ))
+        response.append({
+            "id": note.id,
+            "user_id": str(note.user_id),
+            "title": note.title,
+            "content": note.content,
+            "course_id": note.course_id,
+            "lesson_id": note.lesson_id,
+            "created_at": note.created_at.isoformat() if note.created_at else None,
+            "updated_at": (note.updated_at or note.created_at).isoformat() if (note.updated_at or note.created_at) else None
+        })
     
-    return response
+    return create_paginated_response(items=response, total=total, page=page, items_per_page=items_per_page, has_next=has_next, has_prev=has_prev)
 
 @router.post("/notes", response_model=NoteResponse)
 async def create_note(

@@ -23,7 +23,7 @@ export default function NewNoteScreen() {
   const loadNote = async () => {
     try {
       setLoading(true);
-      const notes = await ApiService.getNotes();
+      const notes = await ApiService.getAllNotes();
       const note = notes.find((n: Note) => n.id === Number(noteId));
       if (note) {
         setTitle(note.title || '');

@@ -100,20 +100,16 @@ export default function CourseScreen() {
         // Update dashboard progress to get latest progress percentages
         updateDashboardProgress();
         
-        // Also refresh lesson progress and detailed progress for the current course
-        const currentCourse = dashboard?.available_courses[currentCourseIndex];
-        if (currentCourse) {
-          console.log('Refreshing lesson progress for course:', currentCourse.course_id);
-          loadLessonProgress(currentCourse.course_id);
-          loadDetailedProgress(currentCourse.course_id);
-        }
+        // Note: loadLessonProgress and loadDetailedProgress are already called
+        // in handleCoursePress, which is triggered by the useEffect when
+        // currentCourseIndex or dashboard changes. No need to duplicate here.
       }
-    }, [isAuthenticated, authLoading, currentCourseIndex])
+    }, [isAuthenticated, authLoading])
   );
 
   const loadFavoritedChapters = async () => {
     try {
-      const favoritedChaptersData = await ApiService.getChapterFavorites();
+      const favoritedChaptersData = await ApiService.getAllChapterFavorites();
       const chapterIds = new Set(favoritedChaptersData.map(ch => ch.chapter_id));
       setFavoritedChapters(chapterIds);
     } catch (error) {
@@ -224,18 +220,22 @@ export default function CourseScreen() {
 
   const handleCoursePress = async (courseId: number) => {
     try {
-      // Load chapters, modules, chapter progress, and detailed progress for the selected course
-      const [courseChapters, courseModules, progressData, detailedProgressData] = await Promise.all([
-        ApiService.getCourseChapters(courseId),
-        ApiService.getCourseModules(courseId),
-        ApiService.getChapterProgress(courseId),
+      // Load chapters, modules, and progress data in parallel
+      // Note: getDetailedProgress already includes chapter progress info
+      const [courseChapters, courseModules, detailedProgressData] = await Promise.all([
+        ApiService.getAllCourseChapters(courseId),
+        ApiService.getAllCourseModules(courseId),
         ApiService.getDetailedProgress(courseId)
       ]);
       
       setChapters(courseChapters);
       setModules(courseModules);
-      setChapterProgress(progressData.chapters);
       setDetailedProgress(detailedProgressData);
+      
+      // Extract chapter progress from detailed progress (no separate API call needed)
+      if (detailedProgressData?.chapters) {
+        setChapterProgress(detailedProgressData.chapters);
+      }
       
       const course = dashboard?.available_courses.find(c => c.course_id === courseId);
       setCurrentCourseTitle(course?.course_title || `Course ${courseId}`);

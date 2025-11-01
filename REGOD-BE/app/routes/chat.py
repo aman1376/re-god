@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Query
 from sqlalchemy.orm import Session
 from typing import List
 import json
@@ -7,11 +7,12 @@ from datetime import datetime
 
 from app.database import get_db, get_db_pool
 from app.models import User, ChatThread, ChatMessage, TeacherAssignment
-from app.schemas import ThreadResponse, MessageResponse, MessageBase
+from app.schemas import ThreadResponse, MessageResponse, MessageBase, PaginatedResponse
 from app.utils.auth import get_current_user
 from app.rbac import require_permission
 from app.realtime import manager
 from app.queue_service import pgmq_service
+from app.utils.pagination import paginate, create_paginated_response
 
 router = APIRouter()
 
@@ -174,14 +175,15 @@ async def get_assigned_students(
     
     return students
 
-@router.get("/thread/messages", response_model=List[MessageResponse])
+@router.get("/thread/messages")
 async def get_message_history(
+    page: int = Query(1, ge=1),
+    items_per_page: int = Query(50, ge=1, le=100),
+    thread_id: int = Query(None),  # specific thread ID to get messages from
     current_user: dict = Depends(get_current_user),
-    db: Session = Depends(get_db),
-    before: str = None,  # timestamp for pagination
-    thread_id: int = None  # specific thread ID to get messages from
+    db: Session = Depends(get_db)
 ):
-    """Get message history for the user's chat thread"""
+    """Get message history for the user's chat thread with pagination"""
     user_uuid = uuid.UUID(current_user["id"])
     
     # For students, find thread where they are the user
@@ -204,46 +206,39 @@ async def get_message_history(
             ).first()
     
     if not thread:
-        return []
+        return create_paginated_response(items=[], total=0, page=page, items_per_page=items_per_page, has_next=False, has_prev=False)
     
-    # Build query
+    # Build query - order by timestamp descending to get newest first
     query = db.query(ChatMessage).filter(
         ChatMessage.thread_id == thread.id
-    ).order_by(ChatMessage.timestamp.asc())
+    ).order_by(ChatMessage.timestamp.desc())
     
-    # Apply pagination if before timestamp provided
-    if before:
-        try:
-            before_date = datetime.fromisoformat(before.replace('Z', '+00:00'))
-            query = query.filter(ChatMessage.timestamp < before_date)
-        except ValueError:
-            pass
-    
-    messages = query.limit(50).all()
+    # Apply pagination
+    items, total, page, items_per_page, has_next, has_prev = paginate(query, page, items_per_page)
     
     # Mark messages as read
-    for message in messages:
+    for message in items:
         if message.sender_id != user_uuid and not message.read_status:
             message.read_status = True
     db.commit()
     
-    # Prepare response
+    # Format response (reverse to show chronological order - oldest first)
     response = []
-    for msg in messages:  # Return in chronological order (already ordered by timestamp.asc())
+    for msg in reversed(items):  # Reverse because query is DESC but we want to show oldest first
         sender = db.query(User).filter(User.id == msg.sender_id).first()
-        response.append(MessageResponse(
-            id=msg.id,
-            thread_id=msg.thread_id,
-            sender_id=str(msg.sender_id),
-            sender_name=sender.name if sender else "Unknown",
-            sender_type=msg.sender_type,
-            content=msg.content,
-            message_type=msg.message_type,
-            timestamp=msg.timestamp,
-            read_status=msg.read_status
-        ))
+        response.append({
+            "id": msg.id,
+            "thread_id": msg.thread_id,
+            "sender_id": str(msg.sender_id),
+            "sender_name": sender.name if sender else "Unknown",
+            "sender_type": msg.sender_type,
+            "content": msg.content,
+            "message_type": msg.message_type,
+            "timestamp": msg.timestamp.isoformat() if msg.timestamp else None,
+            "read_status": msg.read_status
+        })
     
-    return response
+    return create_paginated_response(items=response, total=total, page=page, items_per_page=items_per_page, has_next=has_next, has_prev=has_prev)
 
 @router.post("/thread/messages", response_model=MessageResponse)
 async def send_message(

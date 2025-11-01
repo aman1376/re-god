@@ -1,12 +1,13 @@
 "use client"
 
-import React, { useEffect, useState } from "react"
-import { useAuth } from "@clerk/nextjs"
+import React, { useEffect, useState, Suspense } from "react"
+import { useAuth, useUser } from "@clerk/nextjs"
 import { useRouter, useSearchParams } from "next/navigation"
 import AdminApiService from "@/lib/api"
 
-export default function TeacherSignupSuccessPage() {
-  const { isSignedIn, isLoaded, user } = useAuth()
+function TeacherSignupSuccessContent() {
+  const { isSignedIn, isLoaded } = useAuth()
+  const { user } = useUser()
   const router = useRouter()
   const searchParams = useSearchParams()
   const [isProcessing, setIsProcessing] = useState(true)
@@ -131,5 +132,20 @@ export default function TeacherSignupSuccessPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function TeacherSignupSuccessPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center p-4">
+        <div className="bg-white rounded-lg shadow-xl p-8 max-w-md w-full text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-800 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading...</p>
+        </div>
+      </div>
+    }>
+      <TeacherSignupSuccessContent />
+    </Suspense>
   )
 }

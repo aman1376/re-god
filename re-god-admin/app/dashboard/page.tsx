@@ -56,7 +56,7 @@ export default function DashboardPage() {
     }
     
     try {
-      const list = await AdminApiService.getCourses()
+      const list = await AdminApiService.getAllCourses()
       setCourses(list.map((c: any) => ({ id: c.id, title: c.title })))
       if (list.length > 0 && !selectedCourseId) {
         setSelectedCourseId(list[0].id)

@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 import requests
 import json
+import os
 
 # Test the dashboard endpoint
-API_BASE = "https://bf5773da486c.ngrok-free.app/api"
+API_BASE = os.getenv("API_BASE_URL", "http://localhost:4000/api")
 
 # First, get a token via clerk exchange
 def test_clerk_exchange():
     response = requests.post(f"{API_BASE}/auth/clerk-exchange", 
                            json={"identifier": "animeshjha428@gmail.com"},
-                           headers={"ngrok-skip-browser-warning": "true"})
+                           headers={"cloudflare-skip-browser-warning": "true"})
     
     if response.status_code == 200:
         data = response.json()
@@ -24,7 +25,7 @@ def test_clerk_exchange():
 def test_dashboard(token):
     headers = {
         "Authorization": f"Bearer {token}",
-        "ngrok-skip-browser-warning": "true"
+        "cloudflare-skip-browser-warning": "true"
     }
     
     response = requests.get(f"{API_BASE}/user/dashboard", headers=headers)
@@ -43,7 +44,7 @@ def test_dashboard(token):
 def test_course_modules(token, course_id):
     headers = {
         "Authorization": f"Bearer {token}",
-        "ngrok-skip-browser-warning": "true"
+        "cloudflare-skip-browser-warning": "true"
     }
     
     response = requests.get(f"{API_BASE}/courses/{course_id}/modules", headers=headers)
@@ -79,3 +80,4 @@ if __name__ == "__main__":
     elif dashboard.get('available_courses'):
         course_id = dashboard['available_courses'][0]['course_id']
         test_course_modules(token, course_id)
+

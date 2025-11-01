@@ -1,16 +1,17 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List
 
 from app.database import get_db
-from app.models import User, Role, Permission, TeacherAssignment, TeacherCode, user_roles, Course
-from app.schemas import RoleResponse, PermissionResponse, TeacherAssignmentResponse, UserResponse, TeacherCodeResponse
+from app.models import User, Role, Permission, TeacherAssignment, TeacherCode, user_roles, Course, role_permissions, user_permissions
+from app.schemas import RoleResponse, PermissionResponse, TeacherAssignmentResponse, UserResponse, TeacherCodeResponse, PaginatedResponse
 from app.clerk import clerk_client
 from datetime import datetime, timedelta, timezone
 import secrets, string
 from app.utils.auth import get_current_user
 from app.rbac import require_permission, require_role
 from app.utils.security import get_password_hash
+from app.utils.pagination import paginate, create_paginated_response
 
 router = APIRouter()
 
@@ -438,25 +439,53 @@ async def complete_teacher_signup(
 
     return {"message": "Teacher signup completed. You can now log in.", "user_id": str(user.id)}
 
-@router.get("/roles", response_model=List[RoleResponse])
+@router.get("/roles")
 @require_permission("admin:users:manage")
 async def get_all_roles(
+    page: int = Query(1, ge=1),
+    items_per_page: int = Query(50, ge=1, le=100),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get all roles (admin only)"""
-    roles = db.query(Role).all()
-    return roles
+    """Get all roles with pagination (admin only)"""
+    query = db.query(Role)
+    items, total, page, items_per_page, has_next, has_prev = paginate(query, page, items_per_page)
+    
+    result = []
+    for role in items:
+        result.append({
+            "id": role.id,
+            "name": role.name,
+            "description": role.description,
+            "is_default": role.is_default,
+            "created_at": role.created_at.isoformat() if role.created_at else None,
+            "permissions": [p.name for p in role.permissions] if role.permissions else []
+        })
+    
+    return create_paginated_response(items=result, total=total, page=page, items_per_page=items_per_page, has_next=has_next, has_prev=has_prev)
 
-@router.get("/permissions", response_model=List[PermissionResponse])
+@router.get("/permissions")
 @require_permission("admin:users:manage")
 async def get_all_permissions(
+    page: int = Query(1, ge=1),
+    items_per_page: int = Query(50, ge=1, le=100),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get all permissions (admin only)"""
-    permissions = db.query(Permission).all()
-    return permissions
+    """Get all permissions with pagination (admin only)"""
+    query = db.query(Permission)
+    items, total, page, items_per_page, has_next, has_prev = paginate(query, page, items_per_page)
+    
+    result = []
+    for perm in items:
+        result.append({
+            "id": perm.id,
+            "name": perm.name,
+            "description": perm.description,
+            "created_at": perm.created_at.isoformat() if perm.created_at else None
+        })
+    
+    return create_paginated_response(items=result, total=total, page=page, items_per_page=items_per_page, has_next=has_next, has_prev=has_prev)
 
 @router.post("/users/{user_id}/roles/{role_id}")
 @require_permission("admin:users:manage")
@@ -557,15 +586,30 @@ async def delete_user_account(
         "reassigned_students": reassigned_count if is_teacher else 0
     }
 
-@router.get("/teacher-assignments", response_model=List[TeacherAssignmentResponse])
+@router.get("/teacher-assignments")
 @require_permission("admin:users:manage")
 async def get_all_teacher_assignments(
+    page: int = Query(1, ge=1),
+    items_per_page: int = Query(50, ge=1, le=100),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get all teacher assignments (admin only)"""
-    assignments = db.query(TeacherAssignment).all()
-    return assignments
+    """Get all teacher assignments with pagination (admin only)"""
+    query = db.query(TeacherAssignment)
+    items, total, page, items_per_page, has_next, has_prev = paginate(query, page, items_per_page)
+    
+    result = []
+    for assignment in items:
+        result.append({
+            "id": assignment.id,
+            "teacher_id": str(assignment.teacher_id),
+            "student_id": str(assignment.student_id),
+            "assigned_by": str(assignment.assigned_by) if assignment.assigned_by else None,
+            "assigned_at": assignment.assigned_at.isoformat() if assignment.assigned_at else None,
+            "active": assignment.active
+        })
+    
+    return create_paginated_response(items=result, total=total, page=page, items_per_page=items_per_page, has_next=has_next, has_prev=has_prev)
 
 @router.post("/teacher-assignments")
 @require_permission("admin:users:manage")
@@ -635,31 +679,34 @@ async def delete_teacher_assignment(
     
     return {"message": "Teacher assignment deleted successfully"}
 
-@router.get("/teacher-codes", response_model=List[TeacherCodeResponse])
+@router.get("/teacher-codes")
 @require_permission("admin:users:manage")
 async def get_all_teacher_codes(
+    page: int = Query(1, ge=1),
+    items_per_page: int = Query(50, ge=1, le=100),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get all teacher codes (admin only)"""
-    teacher_codes = db.query(TeacherCode).all()
+    """Get all teacher codes with pagination (admin only)"""
+    query = db.query(TeacherCode)
+    items, total, page, items_per_page, has_next, has_prev = paginate(query, page, items_per_page)
     
     response = []
-    for code in teacher_codes:
+    for code in items:
         teacher = db.query(User).filter(User.id == code.teacher_id).first()
-        response.append(TeacherCodeResponse(
-            id=code.id,
-            code=code.code,
-            teacher_id=code.teacher_id,
-            teacher_name=teacher.name if teacher else "Unknown Teacher",
-            created_at=code.created_at,
-            max_uses=code.max_uses,
-            expires_at=code.expires_at,
-            use_count=code.use_count,
-            is_active=code.is_active
-        ))
+        response.append({
+            "id": code.id,
+            "code": code.code,
+            "teacher_id": str(code.teacher_id),
+            "teacher_name": teacher.name if teacher else "Unknown Teacher",
+            "created_at": code.created_at.isoformat() if code.created_at else None,
+            "max_uses": code.max_uses,
+            "expires_at": code.expires_at.isoformat() if code.expires_at else None,
+            "use_count": code.use_count,
+            "is_active": code.is_active
+        })
     
-    return response
+    return create_paginated_response(items=response, total=total, page=page, items_per_page=items_per_page, has_next=has_next, has_prev=has_prev)
 
 @router.get("/stats")
 @require_permission("admin:users:manage")
@@ -713,17 +760,21 @@ async def get_teacher_stats(
 @router.get("/my-students")
 @require_role(["teacher", "admin"])
 async def get_my_students(
+    page: int = Query(1, ge=1),
+    items_per_page: int = Query(50, ge=1, le=100),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get students assigned to this teacher"""
-    assignments = db.query(TeacherAssignment).filter(
+    """Get students assigned to this teacher with pagination"""
+    query = db.query(TeacherAssignment).filter(
         TeacherAssignment.teacher_id == current_user["id"],
         TeacherAssignment.active == True
-    ).all()
+    )
+    
+    items, total, page, items_per_page, has_next, has_prev = paginate(query, page, items_per_page)
     
     students = []
-    for assignment in assignments:
+    for assignment in items:
         student = db.query(User).filter(User.id == assignment.student_id).first()
         if student:
             students.append({
@@ -733,40 +784,93 @@ async def get_my_students(
                 "assigned_at": assignment.assigned_at.isoformat()
             })
     
-    return students
+    return create_paginated_response(items=students, total=total, page=page, items_per_page=items_per_page, has_next=has_next, has_prev=has_prev)
 
 @router.get("/teachers")
 @require_permission("admin:users:manage")
 async def get_teachers_directory(
+    page: int = Query(1, ge=1),
+    items_per_page: int = Query(50, ge=1, le=100),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get all teachers"""
+    """Get all teachers with pagination (excluding users who also have admin role)"""
     teacher_role = db.query(Role).filter(Role.name == "teacher").first()
+    admin_role = db.query(Role).filter(Role.name == "admin").first()
+    
     if not teacher_role:
-        return []
+        return create_paginated_response(items=[], total=0, page=page, items_per_page=items_per_page, has_next=False, has_prev=False)
     
-    teachers = db.query(User).join(user_roles, User.id == user_roles.c.user_id).filter(user_roles.c.role_id == teacher_role.id).all()
+    # Get all teachers (filter out inactive users)
+    teachers_query = db.query(User).join(user_roles, User.id == user_roles.c.user_id).filter(
+        user_roles.c.role_id == teacher_role.id,
+        User.is_active == True  # Only show active teachers
+    )
     
-    return [
-        {
+    # Filter out users who also have admin role
+    if admin_role:
+        # Get user IDs who have admin role
+        admin_user_ids = db.query(user_roles.c.user_id).filter(user_roles.c.role_id == admin_role.id).all()
+        admin_user_id_set = {user_id[0] for user_id in admin_user_ids}
+        
+        # Exclude admin users from teacher list
+        teachers_query = teachers_query.filter(~User.id.in_(admin_user_id_set))
+    
+    # Apply pagination
+    items, total, page, items_per_page, has_next, has_prev = paginate(teachers_query, page, items_per_page)
+    
+    # Get content:upload permission ID for checking
+    content_upload_perm = db.query(Permission).filter(Permission.name == "content:upload").first()
+    
+    result = []
+    for teacher in items:
+        # Get teacher code if exists
+        teacher_code_obj = db.query(TeacherCode).filter(TeacherCode.teacher_id == teacher.id).first()
+        teacher_code = teacher_code_obj.code if teacher_code_obj else None
+        
+        # Check if teacher has content:upload permission (check both role and user-specific permissions)
+        has_upload_permission = False
+        if content_upload_perm:
+            # Check role-based permissions
+            for role in teacher.roles:
+                perm_exists = db.query(role_permissions).filter(
+                    role_permissions.c.role_id == role.id,
+                    role_permissions.c.permission_id == content_upload_perm.id
+                ).first() is not None
+                if perm_exists:
+                    has_upload_permission = True
+                    break
+            
+            # Check user-specific permissions (override role permissions)
+            if not has_upload_permission:
+                user_perm_exists = db.query(user_permissions).filter(
+                    user_permissions.c.user_id == teacher.id,
+                    user_permissions.c.permission_id == content_upload_perm.id
+                ).first() is not None
+                has_upload_permission = user_perm_exists
+        
+        result.append({
             "id": str(teacher.id),
             "name": teacher.name,
             "email": teacher.email,
             "avatar_url": teacher.avatar_url,
             "created_at": teacher.created_at.isoformat() if teacher.created_at else None,
-            "is_active": teacher.is_active
-        }
-        for teacher in teachers
-    ]
+            "is_active": teacher.is_active,
+            "teacher_code": teacher_code,
+            "can_upload": has_upload_permission
+        })
+    
+    return create_paginated_response(items=result, total=total, page=page, items_per_page=items_per_page, has_next=has_next, has_prev=has_prev)
 
 @router.get("/students")
 @require_role(["admin", "teacher"])
 async def get_students_directory(
+    page: int = Query(1, ge=1),
+    items_per_page: int = Query(50, ge=1, le=100),
     current_user: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get students - admins see all students, teachers see only their assigned students"""
+    """Get students with pagination - admins see all students, teachers see only their assigned students"""
     from app.models import UserCourseProgress, TeacherAssignment
     
     # Check if current user is admin
@@ -775,8 +879,6 @@ async def get_students_directory(
     
     if is_admin:
         # Admin sees all students
-        # Get all users who don't have admin or teacher roles (i.e., students)
-        # First get teacher and admin role IDs
         teacher_role = db.query(Role).filter(Role.name == "teacher").first()
         admin_role = db.query(Role).filter(Role.name == "admin").first()
         
@@ -786,18 +888,17 @@ async def get_students_directory(
         if admin_role:
             role_ids_to_exclude.append(admin_role.id)
         
-        # Get all users who don't have these roles
         if role_ids_to_exclude:
-            students = db.query(User).filter(
+            query = db.query(User).filter(
                 ~User.id.in_(
                     db.query(user_roles.c.user_id).filter(
                         user_roles.c.role_id.in_(role_ids_to_exclude)
                     )
                 ),
                 User.is_active == True
-            ).all()
+            )
         else:
-            students = db.query(User).filter(User.is_active == True).all()
+            query = db.query(User).filter(User.is_active == True)
     else:
         # Teacher sees only their assigned students
         assignments = db.query(TeacherAssignment).filter(
@@ -806,14 +907,40 @@ async def get_students_directory(
         ).all()
         
         student_ids = [assignment.student_id for assignment in assignments]
-        students = db.query(User).filter(User.id.in_(student_ids)).all()
+        query = db.query(User).filter(User.id.in_(student_ids))
+    
+    # Apply pagination
+    items, total, page, items_per_page, has_next, has_prev = paginate(query, page, items_per_page)
     
     result = []
-    for student in students:
-        # Get course progress count
+    for student in items:
         course_count = db.query(UserCourseProgress).filter(
             UserCourseProgress.user_id == student.id
         ).count()
+        
+        # Get teacher assignment for this student
+        teacher_assignment = db.query(TeacherAssignment).filter(
+            TeacherAssignment.student_id == student.id,
+            TeacherAssignment.active == True
+        ).first()
+        
+        teacher_id = None
+        teacher_name = None
+        teacher_code = None
+        
+        if teacher_assignment:
+            teacher = db.query(User).filter(User.id == teacher_assignment.teacher_id).first()
+            if teacher:
+                teacher_id = str(teacher.id)
+                teacher_name = teacher.name
+                # Get teacher code if exists
+                from app.models import TeacherCode
+                teacher_code_obj = db.query(TeacherCode).filter(
+                    TeacherCode.teacher_id == teacher.id,
+                    TeacherCode.is_active == True
+                ).first()
+                if teacher_code_obj:
+                    teacher_code = teacher_code_obj.code
         
         result.append({
             "id": str(student.id),
@@ -825,10 +952,207 @@ async def get_students_directory(
             "avatar_url": student.avatar_url,
             "created_at": student.created_at.isoformat() if student.created_at else None,
             "is_active": student.is_active,
-            "enrolled_courses": course_count
+            "enrolled_courses": course_count,
+            "teacher_id": teacher_id,
+            "teacher_name": teacher_name,
+            "teacher_code": teacher_code
         })
     
-    return result
+    return create_paginated_response(items=result, total=total, page=page, items_per_page=items_per_page, has_next=has_next, has_prev=has_prev)
+
+@router.put("/students/{student_id}/teacher")
+@require_permission("admin:users:manage")
+async def update_student_teacher(
+    student_id: str,
+    payload: dict,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update student's teacher assignment - admin only"""
+    import uuid
+    from app.models import TeacherAssignment, TeacherCode
+    
+    # Validate student exists
+    student = db.query(User).filter(User.id == uuid.UUID(student_id)).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    
+    teacher_id = payload.get("teacher_id")
+    if not teacher_id:
+        raise HTTPException(status_code=400, detail="teacher_id is required")
+    
+    # Validate teacher exists and has teacher role
+    teacher = db.query(User).filter(User.id == uuid.UUID(teacher_id)).first()
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher not found")
+    
+    # Check if user has teacher role
+    teacher_role = db.query(Role).filter(Role.name == "teacher").first()
+    has_teacher_role = False
+    if teacher_role:
+        has_teacher_role = teacher_role in teacher.roles
+    
+    # Allow admin users as well
+    admin_role = db.query(Role).filter(Role.name == "admin").first()
+    has_admin_role = False
+    if admin_role:
+        has_admin_role = admin_role in teacher.roles
+    
+    if not has_teacher_role and not has_admin_role:
+        raise HTTPException(status_code=400, detail="Specified user is not a teacher or admin")
+    
+    # Deactivate existing active assignments for this student
+    existing_assignments = db.query(TeacherAssignment).filter(
+        TeacherAssignment.student_id == uuid.UUID(student_id),
+        TeacherAssignment.active == True
+    ).all()
+    
+    for assignment in existing_assignments:
+        assignment.active = False
+    
+    # Create or reactivate assignment with new teacher
+    existing_assignment = db.query(TeacherAssignment).filter(
+        TeacherAssignment.student_id == uuid.UUID(student_id),
+        TeacherAssignment.teacher_id == uuid.UUID(teacher_id)
+    ).first()
+    
+    if existing_assignment:
+        existing_assignment.active = True
+        existing_assignment.assigned_by = uuid.UUID(current_user["id"])
+        existing_assignment.assigned_at = datetime.utcnow()
+    else:
+        new_assignment = TeacherAssignment(
+            student_id=uuid.UUID(student_id),
+            teacher_id=uuid.UUID(teacher_id),
+            assigned_by=uuid.UUID(current_user["id"]),
+            active=True
+        )
+        db.add(new_assignment)
+    
+    db.commit()
+    
+    # Get updated teacher info
+    teacher_assignment = db.query(TeacherAssignment).filter(
+        TeacherAssignment.student_id == uuid.UUID(student_id),
+        TeacherAssignment.active == True
+    ).first()
+    
+    teacher_id_result = None
+    teacher_name_result = None
+    teacher_code_result = None
+    
+    if teacher_assignment:
+        teacher_obj = db.query(User).filter(User.id == teacher_assignment.teacher_id).first()
+        if teacher_obj:
+            teacher_id_result = str(teacher_obj.id)
+            teacher_name_result = teacher_obj.name
+            teacher_code_obj = db.query(TeacherCode).filter(
+                TeacherCode.teacher_id == teacher_obj.id,
+                TeacherCode.is_active == True
+            ).first()
+            if teacher_code_obj:
+                teacher_code_result = teacher_code_obj.code
+    
+    return {
+        "success": True,
+        "message": "Student's teacher assignment updated successfully",
+        "student_id": student_id,
+        "teacher_id": teacher_id_result,
+        "teacher_name": teacher_name_result,
+        "teacher_code": teacher_code_result
+    }
+
+@router.put("/teachers/{teacher_id}/permissions/upload")
+@require_permission("admin:users:manage")
+async def toggle_teacher_upload_permission(
+    teacher_id: str,
+    payload: dict,
+    current_user: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Toggle upload permission for a specific teacher - admin only"""
+    import uuid
+    from app.models import Permission
+    
+    # Validate teacher exists
+    teacher = db.query(User).filter(User.id == uuid.UUID(teacher_id)).first()
+    if not teacher:
+        raise HTTPException(status_code=404, detail="Teacher not found")
+    
+    # Check if user has teacher role
+    teacher_role = db.query(Role).filter(Role.name == "teacher").first()
+    has_teacher_role = False
+    if teacher_role:
+        has_teacher_role = teacher_role in teacher.roles
+    
+    if not has_teacher_role:
+        raise HTTPException(status_code=400, detail="Specified user is not a teacher")
+    
+    # Get content:upload permission
+    upload_permission = db.query(Permission).filter(Permission.name == "content:upload").first()
+    if not upload_permission:
+        raise HTTPException(status_code=500, detail="content:upload permission not found in database")
+    
+    # Get enabled value from payload
+    enabled = payload.get("enabled", True)
+    
+    # Check if teacher already has admin role
+    admin_role = db.query(Role).filter(Role.name == "admin").first()
+    has_admin_role = admin_role and admin_role in teacher.roles
+    
+    if has_admin_role:
+        return {
+            "success": False,
+            "message": "Cannot modify upload permission for admin users",
+            "teacher_id": teacher_id,
+            "permission_enabled": True
+        }
+    
+    # Check if user already has this permission at user level
+    existing_user_perm = db.query(user_permissions).filter(
+        user_permissions.c.user_id == teacher.id,
+        user_permissions.c.permission_id == upload_permission.id
+    ).first()
+    
+    if enabled and not existing_user_perm:
+        # Grant permission to this specific user
+        db.execute(
+            user_permissions.insert().values(
+                user_id=teacher.id,
+                permission_id=upload_permission.id,
+                granted_by=uuid.UUID(current_user["id"])
+            )
+        )
+        db.commit()
+        return {
+            "success": True,
+            "message": f"Upload permission granted to {teacher.name}",
+            "teacher_id": teacher_id,
+            "permission_enabled": True
+        }
+    elif not enabled and existing_user_perm:
+        # Revoke permission from this specific user
+        db.execute(
+            user_permissions.delete().where(
+                user_permissions.c.user_id == teacher.id,
+                user_permissions.c.permission_id == upload_permission.id
+            )
+        )
+        db.commit()
+        return {
+            "success": True,
+            "message": f"Upload permission revoked from {teacher.name}",
+            "teacher_id": teacher_id,
+            "permission_enabled": False
+        }
+    else:
+        # Permission already in desired state
+        return {
+            "success": True,
+            "message": f"Upload permission already {('enabled' if enabled else 'disabled')} for {teacher.name}",
+            "teacher_id": teacher_id,
+            "permission_enabled": enabled
+        }
 
 @router.get("/students/{student_id}/analytics")
 @require_role(["admin", "teacher"])

@@ -46,10 +46,19 @@ export default function ConnectScreen() {
   // Check if user is admin or teacher
   const isAdminOrTeacher = user?.role === 'admin' || user?.role === 'teacher';
 
-  useEffect(() => {
-    loadConnections();
+  // Only load connections on focus, not on mount
+  // This prevents duplicate calls since useFocusEffect runs on mount + focus
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('Connect screen focused - loading data');
+      if (user?.id) {
+        loadConnections('focus');
+      }
+    }, [user?.id])
+  );
 
-    // Initialize WebSocket for real-time updates
+  // Initialize WebSocket separately (doesn't need to reload on every focus)
+  useEffect(() => {
     if (user?.id && useWebSocket) {
       connectWebSocket();
     }
@@ -59,17 +68,7 @@ export default function ConnectScreen() {
         wsRef.current.close();
       }
     };
-  }, [user?.id]);
-
-  // Refresh connections when screen comes into focus
-  useFocusEffect(
-    React.useCallback(() => {
-      console.log('Connect screen focused - refreshing data');
-      if (user?.id) {
-        loadConnections('focus');
-      }
-    }, [user?.id])
-  );
+  }, [user?.id, useWebSocket]);
 
   const connectWebSocket = async () => {
     if (!user?.id) return;

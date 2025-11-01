@@ -63,13 +63,16 @@ const CourseStep2 = ({ form, setForm, courseId }: { form: any, setForm: (form: a
     
     setUploading(true)
     try {
-      // Use structured upload if we have a courseId (editing), otherwise use generic upload
+      // If we have a courseId (editing), upload directly to Supabase
       if (courseId) {
         const res = await AdminApiService.uploadCourseCover(f, courseId)
         setForm((s: any) => ({ ...s, thumbnail_url: res.cover_url }))
       } else {
-        const res = await AdminApiService.uploadFile(f)
-        setForm((s: any) => ({ ...s, thumbnail_url: res.path }))
+        // For course creation, store the file temporarily and upload after creation
+        setForm((s: any) => ({ ...s, _thumbnailFile: f }))
+        // Create a preview URL for the form
+        const previewUrl = URL.createObjectURL(f)
+        setForm((s: any) => ({ ...s, thumbnail_url: previewUrl, _isPreview: true }))
       }
     } catch (error) {
       console.error('Upload failed:', error)
@@ -135,13 +138,16 @@ const CourseStep3 = ({ form, setForm, courseId }: { form: any, setForm: (form: a
 
   const uploadCover = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
-    if (!f || !courseId) return
+    if (!f) return
     
     try {
-      // For chapter thumbnails during course creation, use generic upload
-      // After chapter is created, we can use the structured upload
-      const res = await AdminApiService.uploadFile(f)
-      setNewChapter(prev => ({ ...prev, cover_image_url: res.path }))
+      // Store the file temporarily and create preview for course creation
+      setNewChapter(prev => ({ 
+        ...prev, 
+        _coverFile: f,
+        cover_image_url: URL.createObjectURL(f),
+        _isPreview: true
+      }))
     } catch (error) {
       console.error('Upload failed:', error)
       alert('Failed to upload cover image. Please try again.')
@@ -321,6 +327,22 @@ const ModuleStep2 = ({
 
       const response = await AdminApiService.createChapter(selectedCourseId, chapterData)
       
+      // Upload chapter cover to Supabase if we have a file
+      if ((newChapter as any)._coverFile) {
+        try {
+          const uploadResponse = await AdminApiService.uploadChapterThumbnail((newChapter as any)._coverFile, selectedCourseId, response.id)
+          // Update the chapter with the Supabase URL
+          await AdminApiService.updateChapter(selectedCourseId, response.id, {
+            title: newChapter.title,
+            order: nextOrder,
+            cover_image_url: uploadResponse.thumbnail_url
+          })
+          console.log('Chapter cover uploaded to Supabase:', uploadResponse.thumbnail_url)
+        } catch (uploadError) {
+          console.error('Failed to upload chapter cover to Supabase:', uploadError)
+        }
+      }
+      
       // Add the new chapter to the list
       const updatedChapters = [...chapters, response]
       onChaptersUpdate(updatedChapters)
@@ -339,13 +361,16 @@ const ModuleStep2 = ({
 
   const uploadCover = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
-    if (!f || !selectedCourseId) return
+    if (!f) return
     
     try {
-      // For new chapters, use generic upload initially
-      // After creation, can be updated with structured upload
-      const res = await AdminApiService.uploadFile(f)
-      setNewChapter(prev => ({ ...prev, cover_image_url: res.path }))
+      // Store the file temporarily and create preview
+      setNewChapter(prev => ({ 
+        ...prev, 
+        _coverFile: f,
+        cover_image_url: URL.createObjectURL(f),
+        _isPreview: true
+      }))
     } catch (error) {
       console.error('Upload failed:', error)
       alert('Failed to upload cover image. Please try again.')
@@ -513,13 +538,16 @@ const ModuleStep4 = ({ form, setForm, courseId, moduleId }: { form: any, setForm
     
     setUploading(true)
     try {
-      // Use structured upload if we have all IDs, otherwise use generic upload
+      // If we have all required IDs (editing), upload directly to Supabase
       if (courseId && form.chapter_id && moduleId) {
         const res = await AdminApiService.uploadLessonImage(f, courseId, form.chapter_id, moduleId)
         setForm((s: any) => ({ ...s, header_image_url: res.image_url }))
       } else {
-        const res = await AdminApiService.uploadFile(f)
-        setForm((s: any) => ({ ...s, header_image_url: res.path }))
+        // For module creation, store the file temporarily and upload after creation
+        setForm((s: any) => ({ ...s, _headerImageFile: f }))
+        // Create a preview URL for the form
+        const previewUrl = URL.createObjectURL(f)
+        setForm((s: any) => ({ ...s, header_image_url: previewUrl, _isPreview: true }))
       }
     } catch (error) {
       console.error('Upload failed:', error)
@@ -834,7 +862,7 @@ export function ContentManagerModal({
   useEffect(() => {
     if (contentType === 'module' && open) {
       // Load courses for module creation
-      AdminApiService.getCourses().then(courseList => {
+      AdminApiService.getAllCourses().then(courseList => {
         setCourses(courseList.map((c: any) => ({ id: c.id, title: c.title })))
         if (courseId && !selectedCourseId) {
           setSelectedCourseId(courseId)
@@ -843,9 +871,9 @@ export function ContentManagerModal({
     }
     
     if (contentType === 'module' && selectedCourseId && open) {
-      AdminApiService.getChapters(selectedCourseId).then(setChapters).catch(() => setChapters([]))
+      AdminApiService.getAllChapters(selectedCourseId).then(setChapters).catch(() => setChapters([]))
       // Load existing modules to determine next order
-      AdminApiService.getModules(selectedCourseId).then(modules => {
+      AdminApiService.getAllModules(selectedCourseId).then(modules => {
         setExistingModules(modules)
         // Auto-increment order for new modules
         const maxOrder = modules.length > 0 ? Math.max(...modules.map((m: any) => m.order || 0)) : 0
@@ -868,9 +896,9 @@ export function ContentManagerModal({
     setChapters([]) // Clear chapters when course changes
     setExistingModules([]) // Clear modules when course changes
     // Load chapters for the new course
-    AdminApiService.getChapters(newCourseId).then(setChapters).catch(() => setChapters([]))
+    AdminApiService.getAllChapters(newCourseId).then(setChapters).catch(() => setChapters([]))
     // Load existing modules to determine next order
-    AdminApiService.getModules(newCourseId).then(modules => {
+    AdminApiService.getAllModules(newCourseId).then(modules => {
       setExistingModules(modules)
       // Auto-increment order for new modules
       const maxOrder = modules.length > 0 ? Math.max(...modules.map((m: any) => m.order || 0)) : 0
@@ -898,24 +926,52 @@ export function ContentManagerModal({
     try {
       if (contentType === 'course') {
         if (mode === 'create') {
-          // First create the course
+          // First create the course without thumbnail
           console.log('Creating course with payload:', {
-            title: courseForm.title,
-            thumbnail_url: courseForm.thumbnail_url
+            title: courseForm.title
           })
           const courseResponse = await AdminApiService.createCourse({
-            title: courseForm.title,
-            thumbnail_url: courseForm.thumbnail_url
+            title: courseForm.title
           })
+
+          // Upload course thumbnail to Supabase if we have a file
+          if ((courseForm as any)._thumbnailFile) {
+            try {
+              const uploadResponse = await AdminApiService.uploadCourseCover((courseForm as any)._thumbnailFile, courseResponse.id)
+              // Update the course with the Supabase URL
+              await AdminApiService.updateCourse(courseResponse.id, {
+                title: courseForm.title,
+                thumbnail_url: uploadResponse.cover_url
+              })
+              console.log('Course thumbnail uploaded to Supabase:', uploadResponse.cover_url)
+            } catch (uploadError) {
+              console.error('Failed to upload course thumbnail to Supabase:', uploadError)
+            }
+          }
 
           // Then create chapters if any exist
           if (courseForm.chapters && courseForm.chapters.length > 0) {
             for (const chapter of courseForm.chapters) {
-              await AdminApiService.createChapter(courseResponse.id, {
+              const chapterResponse = await AdminApiService.createChapter(courseResponse.id, {
                 title: chapter.title,
-                order: chapter.order,
-                cover_image_url: chapter.cover_image_url
+                order: chapter.order
               })
+
+              // Upload chapter cover to Supabase if we have a file
+              if ((chapter as any)._coverFile) {
+                try {
+                  const uploadResponse = await AdminApiService.uploadChapterThumbnail((chapter as any)._coverFile, courseResponse.id, chapterResponse.id)
+                  // Update the chapter with the Supabase URL
+                  await AdminApiService.updateChapter(courseResponse.id, chapterResponse.id, {
+                    title: chapter.title,
+                    order: chapter.order,
+                    cover_image_url: uploadResponse.thumbnail_url
+                  })
+                  console.log('Chapter cover uploaded to Supabase:', uploadResponse.thumbnail_url)
+                } catch (uploadError) {
+                  console.error('Failed to upload chapter cover to Supabase:', uploadError)
+                }
+              }
             }
           }
         } else {
@@ -924,7 +980,29 @@ export function ContentManagerModal({
       } else if (contentType === 'module' && selectedCourseId) {
         const payload = { ...moduleForm, quiz: quizData.questions.length > 0 ? quizData : null }
         if (mode === 'create') {
-          await AdminApiService.createModule(selectedCourseId, payload)
+          // Remove the temporary file from payload
+          const { _headerImageFile, _isPreview, ...cleanPayload } = (payload as any)
+          const moduleResponse = await AdminApiService.createModule(selectedCourseId, cleanPayload)
+          
+          // Upload module header image to Supabase if we have a file
+          if ((moduleForm as any)._headerImageFile) {
+            try {
+              const uploadResponse = await AdminApiService.uploadLessonImage(
+                (moduleForm as any)._headerImageFile, 
+                selectedCourseId, 
+                moduleForm.chapter_id, 
+                moduleResponse.id
+              )
+              // Update the module with the Supabase URL
+              await AdminApiService.updateModule(selectedCourseId, moduleResponse.id, {
+                ...cleanPayload,
+                header_image_url: uploadResponse.image_url
+              })
+              console.log('Module header image uploaded to Supabase:', uploadResponse.image_url)
+            } catch (uploadError) {
+              console.error('Failed to upload module header image to Supabase:', uploadError)
+            }
+          }
         } else {
           await AdminApiService.updateModule(selectedCourseId, initialData.id, payload)
         }

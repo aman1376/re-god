@@ -62,6 +62,9 @@ export default function LessonScreen() {
   const [modalContent, setModalContent] = useState('');
   const [modalTitle, setModalTitle] = useState('');
   const [quizScore, setQuizScore] = useState<number | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string>('');
+  const [canAccessModule, setCanAccessModule] = useState<boolean | null>(null);
+  const [lockReason, setLockReason] = useState<string>('');
   
   // Check if user is teacher or admin
   const isTeacherOrAdmin = user?.role === 'teacher' || user?.role === 'admin';
@@ -296,8 +299,29 @@ export default function LessonScreen() {
         throw new Error('Course ID is required');
       }
 
+      // Check module access first (for students only)
+      if (user?.role === 'student') {
+        try {
+          const accessCheck = await ApiService.checkModuleAccess(Number(courseId), Number(moduleId));
+          if (!accessCheck.can_access) {
+            setCanAccessModule(false);
+            setLockReason(accessCheck.reason || 'You need to complete the previous module with at least 60% to unlock this module.');
+            setLoading(false);
+            return;
+          }
+          setCanAccessModule(true);
+        } catch (accessError) {
+          console.error('Error checking module access:', accessError);
+          // If access check fails, allow access (fail open)
+          setCanAccessModule(true);
+        }
+      } else {
+        // Teachers and admins can always access
+        setCanAccessModule(true);
+      }
+
       // Get all modules for the course and find the specific one
-      const modules = await ApiService.getCourseModules(Number(courseId));
+      const modules = await ApiService.getAllCourseModules(Number(courseId));
       const foundModule = modules.find(m => m.id === Number(moduleId));
 
       if (!foundModule) {
@@ -402,11 +426,12 @@ export default function LessonScreen() {
 
       // Save quiz responses to backend
       if (module && courseId) {
-        // Mark lesson as completed with quiz responses
+        // Mark lesson as completed with quiz responses and score
         await ApiService.completeLesson(
           parseInt(courseId),
           parseInt(moduleId),
-          submittedResponses
+          submittedResponses,
+          scorePercentage // Send quiz score to backend
         );
 
         // Update course progress - let backend calculate the correct percentage
@@ -419,9 +444,16 @@ export default function LessonScreen() {
         );
       }
 
-      // Show success modal with score
+      // Show success modal with score and appropriate message
       setShowSuccessModal(true);
       setQuizScore(scorePercentage);
+      
+      // Store message based on score for display in modal
+      if (scorePercentage >= 60) {
+        setSuccessMessage(`Great job! You scored ${scorePercentage}%. Next module unlocked!`);
+      } else {
+        setSuccessMessage(`Your score is ${scorePercentage}%. Please score 60% or higher to unlock the next module. You can retake this quiz.`);
+      }
     } catch (error) {
       console.error('Error submitting quiz responses:', error);
       Alert.alert('Error', 'Failed to submit quiz responses. Please try again.');
@@ -652,6 +684,35 @@ export default function LessonScreen() {
           <Text style={styles.errorText}>Error: {error}</Text>
           <TouchableOpacity style={styles.retryButton} onPress={loadModule}>
             <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  if (canAccessModule === false) {
+    return (
+      <View style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
+
+        {/* Custom Header */}
+        <View style={styles.header}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => router.back()}
+          >
+            <Ionicons name="arrow-back" size={24} color="#333" />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Course</Text>
+          <View style={styles.headerSpacer} />
+        </View>
+
+        <View style={styles.lockContainer}>
+          <Ionicons name="lock-closed-outline" size={80} color="#999" />
+          <Text style={styles.lockTitle}>Module Locked</Text>
+          <Text style={styles.lockMessage}>{lockReason}</Text>
+          <TouchableOpacity style={styles.backToCourseButton} onPress={() => router.back()}>
+            <Text style={styles.backToCourseButtonText}>Back to Course</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -927,7 +988,8 @@ export default function LessonScreen() {
         visible={showSuccessModal}
         onContinue={handleSuccessContinue}
         title="Nice work!"
-        subtitle={nextModule ? "You've unlocked the next lesson!" : "You've completed this lesson!"}
+        subtitle={successMessage ? undefined : (nextModule ? "You've unlocked the next lesson!" : "You've completed this lesson!")}
+        message={successMessage || (nextModule ? "You've unlocked the next lesson!" : "You've completed this lesson!")}
         buttonText="Continue"
         score={quizScore}
       />
@@ -1196,6 +1258,39 @@ const styles = StyleSheet.create({
     marginTop: 10,
     fontSize: 16,
     color: '#6B8E23',
+  },
+  lockContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 40,
+    paddingTop: 100,
+  },
+  lockTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#333',
+    marginTop: 20,
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  lockMessage: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+    lineHeight: 24,
+    marginBottom: 30,
+  },
+  backToCourseButton: {
+    backgroundColor: '#6B8E23',
+    paddingHorizontal: 30,
+    paddingVertical: 12,
+    borderRadius: 25,
+  },
+  backToCourseButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
   },
   errorContainer: {
     flex: 1,

@@ -1,6 +1,23 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Generic, TypeVar
 from datetime import datetime
+
+# Generic type for pagination
+T = TypeVar('T')
+
+# Pagination Schemas
+class PaginatedResponse(BaseModel, Generic[T]):
+    """Standard paginated response"""
+    items: List[T]
+    total: int
+    page: int
+    items_per_page: int
+    total_pages: int
+    has_next: bool
+    has_prev: bool
+    
+    class Config:
+        from_attributes = True
 
 # Auth Schemas
 class UserBase(BaseModel):

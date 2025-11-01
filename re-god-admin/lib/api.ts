@@ -55,6 +55,19 @@ interface Teacher {
   avatar_url?: string;
   created_at: string;
   is_active: boolean;
+  teacher_code?: string;
+  can_upload?: boolean;
+}
+
+// Pagination types
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  page: number;
+  items_per_page: number;
+  total_pages: number;
+  has_next: boolean;
+  has_prev: boolean;
 }
 
 interface Student {
@@ -68,6 +81,9 @@ interface Student {
   created_at: string;
   is_active: boolean;
   enrolled_courses: number;
+  teacher_id?: string;
+  teacher_name?: string;
+  teacher_code?: string;
 }
 
 interface StudentAnalytics {
@@ -389,13 +405,16 @@ class AdminApiService {
     });
   }
 
-  static async getTeachersDirectory(): Promise<Teacher[]> {
-    const response = await fetch(`${API_BASE_URL}/admin/teachers`, {
+  static async getTeachersDirectory(page: number = 1, itemsPerPage: number = 50): Promise<PaginatedResponse<Teacher>> {
+    return this.makeAuthenticatedRequest<PaginatedResponse<Teacher>>(`${API_BASE_URL}/admin/teachers?page=${page}&items_per_page=${itemsPerPage}`, {
       method: 'GET',
-      headers: this.getAuthHeaders(),
     });
-    
-    return this.handleResponse(response);
+  }
+
+  // Backward compatible - returns array for existing components
+  static async getAllTeachers(): Promise<Teacher[]> {
+    const response = await this.getTeachersDirectory(1, 100);
+    return response.items;
   }
 
   static async inviteTeacher(inviteData: TeacherInviteRequest): Promise<TeacherInviteResponse> {
@@ -433,10 +452,16 @@ class AdminApiService {
   }
 
   // Student endpoints
-  static async getStudentsDirectory(): Promise<Student[]> {
-    return this.makeAuthenticatedRequest<Student[]>(`${API_BASE_URL}/admin/students`, {
+  static async getStudentsDirectory(page: number = 1, itemsPerPage: number = 50): Promise<PaginatedResponse<Student>> {
+    return this.makeAuthenticatedRequest<PaginatedResponse<Student>>(`${API_BASE_URL}/admin/students?page=${page}&items_per_page=${itemsPerPage}`, {
       method: 'GET',
     });
+  }
+
+  // Backward compatible - returns array for existing components
+  static async getAllStudents(): Promise<Student[]> {
+    const response = await this.getStudentsDirectory(1, 100);
+    return response.items;
   }
 
   static async getStudentAnalytics(studentId: string): Promise<StudentAnalytics> {
@@ -448,6 +473,38 @@ class AdminApiService {
   static async deleteStudent(studentId: string): Promise<{ message: string }> {
     return this.makeAuthenticatedRequest<{ message: string }>(`${API_BASE_URL}/admin/users/${studentId}`, {
       method: 'DELETE',
+    });
+  }
+
+  static async deleteUser(userId: string): Promise<{ message: string }> {
+    return this.makeAuthenticatedRequest<{ message: string }>(`${API_BASE_URL}/admin/users/${userId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  static async updateStudentTeacher(studentId: string, teacherId: string): Promise<{
+    success: boolean;
+    message: string;
+    student_id: string;
+    teacher_id?: string;
+    teacher_name?: string;
+    teacher_code?: string;
+  }> {
+    return this.makeAuthenticatedRequest(`${API_BASE_URL}/admin/students/${studentId}/teacher`, {
+      method: 'PUT',
+      body: JSON.stringify({ teacher_id: teacherId }),
+    });
+  }
+
+  static async toggleTeacherUploadPermission(teacherId: string, enabled: boolean): Promise<{
+    success: boolean;
+    message: string;
+    teacher_id: string;
+    permission_enabled: boolean;
+  }> {
+    return this.makeAuthenticatedRequest(`${API_BASE_URL}/admin/teachers/${teacherId}/permissions/upload`, {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
     });
   }
 
@@ -583,9 +640,11 @@ class AdminApiService {
     return this.handleResponse(response);
   }
 
-  // Helper function to get full upload URL (supports both Supabase and local URLs)
+  // Helper function to get full upload URL (supports both Supabase, local URLs, and blob URLs)
   static getUploadUrl(path: string): string {
     if (!path) return '';
+    // If path is a blob URL (preview), return as is
+    if (path.startsWith('blob:')) return path;
     // If path already includes the full URL, return as is (Supabase URLs)
     if (path.startsWith('http')) return path;
     // If path starts with /uploads, prepend the upload base URL (local uploads)
@@ -610,10 +669,16 @@ class AdminApiService {
   }
 
   // Courses (admin/teacher)
-  static async getCourses(): Promise<AdminCourse[]> {
-    return this.makeAuthenticatedRequest<AdminCourse[]>(`${API_BASE_URL}/courses`, {
+  static async getCourses(page: number = 1, itemsPerPage: number = 50): Promise<PaginatedResponse<AdminCourse>> {
+    return this.makeAuthenticatedRequest<PaginatedResponse<AdminCourse>>(`${API_BASE_URL}/courses?page=${page}&items_per_page=${itemsPerPage}`, {
       method: 'GET',
     });
+  }
+
+  // Backward compatible - returns array for existing components
+  static async getAllCourses(): Promise<AdminCourse[]> {
+    const response = await this.getCourses(1, 100);
+    return response.items;
   }
 
   static async createCourse(payload: Partial<AdminCourse>): Promise<AdminCourse> {
@@ -634,12 +699,16 @@ class AdminApiService {
     return this.handleResponse(response);
   }
 
-  static async getChapters(courseId: number): Promise<AdminChapter[]> {
-    const response = await fetch(`${API_BASE_URL}/courses/${courseId}/chapters`, {
+  static async getChapters(courseId: number, page: number = 1, itemsPerPage: number = 50): Promise<PaginatedResponse<AdminChapter>> {
+    return this.makeAuthenticatedRequest<PaginatedResponse<AdminChapter>>(`${API_BASE_URL}/courses/${courseId}/chapters?page=${page}&items_per_page=${itemsPerPage}`, {
       method: 'GET',
-      headers: this.getAuthHeaders(),
     });
-    return this.handleResponse(response);
+  }
+
+  // Backward compatible - returns array for existing components
+  static async getAllChapters(courseId: number): Promise<AdminChapter[]> {
+    const response = await this.getChapters(courseId, 1, 100);
+    return response.items;
   }
 
   static async createChapter(courseId: number, payload: Partial<AdminChapter>): Promise<AdminChapter> {
@@ -651,12 +720,16 @@ class AdminApiService {
     return this.handleResponse(response);
   }
 
-  static async getModules(courseId: number): Promise<AdminModule[]> {
-    const response = await fetch(`${API_BASE_URL}/courses/${courseId}/modules`, {
+  static async getModules(courseId: number, page: number = 1, itemsPerPage: number = 50): Promise<PaginatedResponse<AdminModule>> {
+    return this.makeAuthenticatedRequest<PaginatedResponse<AdminModule>>(`${API_BASE_URL}/courses/${courseId}/modules?page=${page}&items_per_page=${itemsPerPage}`, {
       method: 'GET',
-      headers: this.getAuthHeaders(),
     });
-    return this.handleResponse(response);
+  }
+
+  // Backward compatible - returns array for existing components
+  static async getAllModules(courseId: number): Promise<AdminModule[]> {
+    const response = await this.getModules(courseId, 1, 100);
+    return response.items;
   }
 
   static async updateCourse(courseId: number, payload: Partial<AdminCourse>): Promise<AdminCourse> {
