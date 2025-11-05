@@ -65,6 +65,8 @@ export default function LessonScreen() {
   const [successMessage, setSuccessMessage] = useState<string>('');
   const [canAccessModule, setCanAccessModule] = useState<boolean | null>(null);
   const [lockReason, setLockReason] = useState<string>('');
+  const [isFavorited, setIsFavorited] = useState<boolean>(false);
+  const [isTogglingFavorite, setIsTogglingFavorite] = useState<boolean>(false);
   
   // Check if user is teacher or admin
   const isTeacherOrAdmin = user?.role === 'teacher' || user?.role === 'admin';
@@ -335,6 +337,22 @@ export default function LessonScreen() {
 
       setModule(foundModule);
       setNextModule(nextModule);
+      
+      // Check if this module is favorited (for students only)
+      if (user?.role === 'student') {
+        try {
+          const favoritesResponse: any = await ApiService.getFavorites();
+          // Handle both paginated response and array response
+          const favorites = Array.isArray(favoritesResponse) 
+            ? favoritesResponse 
+            : (favoritesResponse?.items || []);
+          const isFav = favorites.some((fav: any) => fav.lesson_id === Number(moduleId));
+          setIsFavorited(isFav);
+        } catch (favError) {
+          console.error('Error checking favorite status:', favError);
+          setIsFavorited(false);
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load lesson');
       console.error('Error loading lesson:', err);
@@ -359,6 +377,21 @@ export default function LessonScreen() {
     setShowResponseModal(true);
     setCurrentQuestionIndex(0);
     setResponses([]);
+  };
+
+  const handleToggleFavorite = async () => {
+    if (!moduleId || isTogglingFavorite) return;
+    
+    try {
+      setIsTogglingFavorite(true);
+      const result: any = await ApiService.toggleFavorite(Number(moduleId));
+      setIsFavorited(result.action === 'added');
+    } catch (error) {
+      console.error('Error toggling favorite:', error);
+      Alert.alert('Error', 'Failed to update favorite status');
+    } finally {
+      setIsTogglingFavorite(false);
+    }
   };
 
   const parseQuizData = (quizData: any): QuizQuestion[] => {
@@ -779,7 +812,17 @@ export default function LessonScreen() {
             </TouchableOpacity>
           </View>
         ) : (
-          <View style={styles.headerSpacer} />
+          <TouchableOpacity
+            style={styles.favoriteButton}
+            onPress={handleToggleFavorite}
+            disabled={isTogglingFavorite}
+          >
+            <Ionicons 
+              name={isFavorited ? "heart" : "heart-outline"} 
+              size={24} 
+              color={isFavorited ? "#FF3B30" : "#333"} 
+            />
+          </TouchableOpacity>
         )}
       </View>
 
@@ -1155,6 +1198,11 @@ const styles = StyleSheet.create({
     padding: 8,
     borderRadius: 20,
     backgroundColor: 'rgba(0, 0, 0, 0.1)',
+  },
+  favoriteButton: {
+    padding: 8,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.05)',
   },
   sectionHeader: {
     flexDirection: 'row',

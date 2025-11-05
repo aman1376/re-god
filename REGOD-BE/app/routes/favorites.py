@@ -27,26 +27,14 @@ async def toggle_favorite(
             detail="Lesson not found"
         )
     
-    # Check if user has access to the course
-    from app.models import TeacherAssignment, Course
-    if current_user.has_role("student"):
-        course = db.query(Course).filter(Course.id == lesson.course_id).first()
-        if course:
-            has_access = db.query(TeacherAssignment).filter(
-                TeacherAssignment.student_id == current_user.id,
-                TeacherAssignment.teacher_id == course.created_by,
-                TeacherAssignment.active == True
-            ).first()
-            
-            if not has_access:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="You don't have access to this lesson"
-                )
+    # No access restrictions - all authenticated users can favorite any module
+    
+    # Convert user_id to UUID
+    user_uuid = uuid.UUID(current_user["id"])
     
     # Check if already favorited
     existing_favorite = db.query(UserFavorite).filter(
-        UserFavorite.user_id == current_user.id,
+        UserFavorite.user_id == user_uuid,
         UserFavorite.lesson_id == lesson_id
     ).first()
     
@@ -58,7 +46,7 @@ async def toggle_favorite(
     else:
         # Add to favorites
         new_favorite = UserFavorite(
-            user_id=current_user.id,
+            user_id=user_uuid,
             lesson_id=lesson_id
         )
         db.add(new_favorite)
@@ -80,17 +68,21 @@ async def get_favorites(
     # Apply pagination
     items, total, page, items_per_page, has_next, has_prev = paginate(query, page, items_per_page)
     
-    # Format response
+    # Format response with course information
     response = []
     for fav in items:
+        lesson = fav.lesson
+        course = lesson.course if lesson else None
+        
         response.append({
             "id": fav.id,
             "user_id": str(fav.user_id),
             "lesson_id": fav.lesson_id,
+            "course_id": lesson.course_id if lesson else None,
             "created_at": fav.created_at.isoformat() if fav.created_at else None,
-            "lesson_title": fav.lesson.title if fav.lesson else "Unknown",
-            "course_title": fav.lesson.course.title if fav.lesson and fav.lesson.course else "Unknown",
-            "thumbnail_url": fav.lesson.course.thumbnail_url if fav.lesson and fav.lesson.course else None
+            "lesson_title": lesson.title if lesson else "Unknown",
+            "course_title": course.title if course else "Unknown",
+            "thumbnail_url": course.thumbnail_url if course else None
         })
     
     return create_paginated_response(items=response, total=total, page=page, items_per_page=items_per_page, has_next=has_next, has_prev=has_prev)
