@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { View, Text, StyleSheet, Image, TouchableOpacity, FlatList, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -24,7 +24,6 @@ interface Conversation {
 const getAvatarUrlWithFallback = (avatarUrl: string | null | undefined): any => {
   // Handle null, undefined, or empty strings
   if (!avatarUrl || avatarUrl === 'undefined' || avatarUrl.trim() === '') {
-    console.log('No valid avatar URL provided, using default avatar');
     return null; // Return null to show default avatar initials
   }
   
@@ -42,16 +41,33 @@ export default function ConnectScreen() {
   const [isConnected, setIsConnected] = useState(false);
   const [useWebSocket, setUseWebSocket] = useState(true);
   const wsRef = useRef<WebSocket | null>(null);
+  const isMountedRef = useRef(true);
+  const lastLoadTimeRef = useRef(0);
+  const loadingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const hasDataRef = useRef(false);
+  const CACHE_DURATION = 5000; // 5 seconds cache
 
   // Check if user is admin or teacher
   const isAdminOrTeacher = user?.role === 'admin' || user?.role === 'teacher';
 
-  // Only load connections on focus, not on mount
-  // This prevents duplicate calls since useFocusEffect runs on mount + focus
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (loadingTimeoutRef.current) {
+        clearTimeout(loadingTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  // Optimized focus effect with caching
   useFocusEffect(
     React.useCallback(() => {
-      console.log('Connect screen focused - loading data');
-      if (user?.id) {
+      if (!user?.id || !isMountedRef.current) return;
+      
+      const now = Date.now();
+      // Only reload if cache expired or no data
+      if (!hasDataRef.current || (now - lastLoadTimeRef.current) > CACHE_DURATION) {
         loadConnections('focus');
       }
     }, [user?.id])
@@ -71,60 +87,73 @@ export default function ConnectScreen() {
   }, [user?.id, useWebSocket]);
 
   const connectWebSocket = async () => {
-    if (!user?.id) return;
+    if (!user?.id || wsRef.current) return;
 
     try {
       const ws = await ApiService.createWebSocketConnection(user.id);
       wsRef.current = ws;
 
       ws.onopen = () => {
-        console.log('[Connect] WebSocket connected successfully');
-        setIsConnected(true);
+        if (isMountedRef.current) {
+          setIsConnected(true);
+        }
       };
 
       ws.onmessage = async (event) => {
-        console.log('[Connect] WebSocket message received:', event.data);
+        if (!isMountedRef.current) return;
+        
         try {
           await ApiService.handleWebSocketMessage(
             event.data,
             async (message) => {
-              // Handle new real-time message - refresh conversations to update unread counts
-              console.log('[Connect] New message received, refreshing conversations:', message);
-              try {
+              // Only refresh if component is still mounted and cache expired
+              const now = Date.now();
+              if (isMountedRef.current && (now - lastLoadTimeRef.current) > 2000) {
                 await loadConnections('websocket');
-                console.log('[Connect] Conversations refreshed successfully after new message');
-              } catch (refreshError) {
-                console.error('[Connect] Failed to refresh conversations after new message:', refreshError);
-                // Fallback: try refreshing again after a short delay
-                setTimeout(() => {
-                  loadConnections('websocket-fallback').catch(console.error);
-                }, 1000);
+                lastLoadTimeRef.current = Date.now();
               }
             },
-            (error) => {
-              console.warn('[Connect] WebSocket message parsing error:', error);
-            }
+            () => {} // Silent error handling
           );
         } catch (error) {
-          console.error('[Connect] Error handling WebSocket message:', error);
+          // Silent error handling for better performance
         }
       };
 
       ws.onclose = (event) => {
-        console.log('[Connect] WebSocket disconnected:', event.code, event.reason);
-        setIsConnected(false);
+        if (isMountedRef.current) {
+          setIsConnected(false);
+          wsRef.current = null;
+        }
       };
 
-      ws.onerror = (error) => {
-        console.warn('[Connect] WebSocket connection failed:', error);
-        setIsConnected(false);
+      ws.onerror = () => {
+        if (isMountedRef.current) {
+          setIsConnected(false);
+          wsRef.current = null;
+        }
       };
     } catch (error) {
-      console.warn('[Connect] WebSocket connection failed:', error);
+      // Silent error handling
+      if (isMountedRef.current) {
+        setIsConnected(false);
+      }
+    }
+  };
+
+  // Optimized date formatting helper
+  const formatTime = (dateString: string | null | undefined): string => {
+    if (!dateString) return '';
+    try {
+      return new Date(dateString).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return '';
     }
   };
 
   const loadConnections = async (source = 'manual') => {
+    if (!isMountedRef.current || !user?.id) return;
+    
     try {
       // Only show loading spinner for manual refreshes, not WebSocket updates
       if (source === 'manual' || source === 'focus') {
@@ -132,40 +161,28 @@ export default function ConnectScreen() {
       }
       setError(null);
 
-      console.log(`Loading connections for user (${source}):`, user);
-      console.log('User role:', user?.role);
-      console.log('User ID:', user?.id);
-      
       if (user?.role === 'student' || (!user?.role && user?.id)) {
-        // For students, get assigned teacher (also handle cases where role might not be set)
-        console.log('Fetching assigned teacher...');
+        // For students, get assigned teacher
         try {
           const teacherData = await ApiService.getAssignedTeacher();
-          console.log('Teacher data received:', teacherData);
+          if (!isMountedRef.current) return;
+          
           setConversations([{
             id: teacherData.id || 'unknown',
             name: teacherData.name || 'Unknown',
             avatar_url: teacherData.avatar_url,
             lastMessage: teacherData.last_message || 'Start a conversation with your teacher',
-            lastMessageTime: teacherData.last_message_time ? (() => {
-              try {
-                return new Date(teacherData.last_message_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-              } catch (e) {
-                return '';
-              }
-            })() : '',
+            lastMessageTime: formatTime(teacherData.last_message_time),
             is_online: teacherData.is_online,
             unread_count: teacherData.unread_count
           }]);
-          console.log(`[${source}] Conversations updated: 1 conversation (teacher)`);
+          lastLoadTimeRef.current = Date.now();
+          hasDataRef.current = true;
         } catch (teacherError) {
-          console.error('Error fetching assigned teacher:', teacherError);
+          if (!isMountedRef.current) return;
           
-          // Check if the error is about not having a teacher assigned
           const errorMessage = teacherError instanceof Error ? teacherError.message : String(teacherError);
           if (errorMessage.includes('No chat thread found') || errorMessage.includes('Students need to initiate conversations')) {
-            // Student doesn't have a teacher assigned yet - show teacher code input
-            console.log('Student needs teacher assignment, showing teacher code input');
             setError('You need to be assigned to a teacher to access courses and chat. Please enter your teacher code.');
             setShowTeacherCodeInput(true);
           } else {
@@ -173,53 +190,52 @@ export default function ConnectScreen() {
           }
         }
       } else if (isAdminOrTeacher) {
-        // For admin/teacher, get assigned students (chat threads)
-        console.log('Fetching assigned students for admin/teacher...');
+        // For admin/teacher, get assigned students
         const studentsData = await ApiService.getAssignedStudents();
-        console.log('Students data received:', studentsData);
+        if (!isMountedRef.current) return;
+        
         setConversations(studentsData.map(student => ({
           id: student.id || 'unknown',
           name: student.name || 'Unknown',
           avatar_url: student.avatar_url,
           lastMessage: student.last_message || 'No messages yet',
-          lastMessageTime: student.last_message_time ? (() => {
-            try {
-              return new Date(student.last_message_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            } catch (e) {
-              return '';
-            }
-          })() : '',
+          lastMessageTime: formatTime(student.last_message_time),
           is_online: student.is_online,
           unread_count: student.unread_count,
-          thread_id: student.thread_id  // Add thread_id to the mapping
+          thread_id: student.thread_id
         })));
-        console.log(`[${source}] Conversations updated:`, studentsData.length, 'conversations');
+        lastLoadTimeRef.current = Date.now();
+        hasDataRef.current = true;
       } else {
         setError('Unable to determine user role');
       }
     } catch (err) {
-      console.error(`[${source}] Error loading connections:`, err);
+      if (!isMountedRef.current) return;
+      
       if (err instanceof Error) {
         setError(`Failed to load connections: ${err.message}`);
       } else {
         setError('Failed to load connections');
       }
     } finally {
-      setLoading(false);
-      console.log(`[${source}] loadConnections completed`);
+      if (isMountedRef.current) {
+        // Use timeout to prevent rapid state updates
+        if (loadingTimeoutRef.current) {
+          clearTimeout(loadingTimeoutRef.current);
+        }
+        loadingTimeoutRef.current = setTimeout(() => {
+          if (isMountedRef.current) {
+            setLoading(false);
+          }
+        }, 100);
+      }
     }
   };
 
-  const renderConversationItem = ({ item }: { item: Conversation }) => {
+  const renderConversationItem = useCallback(({ item }: { item: Conversation }) => {
     // Early return if item is null/undefined
-    if (!item) {
-      console.log('Warning: renderConversationItem received null/undefined item');
-      return null;
-    }
+    if (!item) return null;
 
-    // Debug logging
-    console.log('Rendering conversation item:', item);
-    
     // Safety checks for all required fields
     const safeItem = {
       id: String(item.id || 'unknown'),
@@ -249,11 +265,9 @@ export default function ConnectScreen() {
         onPress={() => {
           try {
             const params = { name: safeItem.name, thread_id: String(item.thread_id || '') };
-            console.log('[Connect] Navigating to chat with params:', params);
-            console.log('[Connect] Item data:', item);
             router.push({ pathname: '/chat' as any, params });
           } catch (error) {
-            console.error('Error navigating to chat:', error);
+            // Silent error handling
           }
         }}
       >
@@ -264,14 +278,6 @@ export default function ConnectScreen() {
               <Image 
                 source={avatarSource} 
                 style={styles.avatar}
-                onError={(error) => {
-                  console.log(`❌ Avatar image failed to load for "${safeItem.name}":`, safeItem.avatar_url);
-                }}
-                onLoad={() => {
-                  if (safeItem.avatar_url && safeItem.avatar_url !== 'undefined') {
-                    console.log(`✅ Avatar image loaded successfully for "${safeItem.name}"`);
-                  }
-                }}
               />
             ) : (
               <View style={[styles.avatar, styles.defaultAvatar]}>
@@ -301,7 +307,7 @@ export default function ConnectScreen() {
         </View>
       </TouchableOpacity>
     );
-  };
+  }, [router]);
 
   if (loading) {
     return (
@@ -386,6 +392,11 @@ export default function ConnectScreen() {
           data={conversations || []}
           renderItem={renderConversationItem}
           keyExtractor={(item, index) => item?.id || `conversation-${index}`}
+          removeClippedSubviews={true}
+          maxToRenderPerBatch={10}
+          windowSize={10}
+          initialNumToRender={10}
+          updateCellsBatchingPeriod={50}
         />
       )}
 

@@ -72,7 +72,6 @@ export default function CourseScreen() {
   const [showLessonModal, setShowLessonModal] = useState(false);
   const [selectedChapterId, setSelectedChapterId] = useState<number | null>(null);
   const [completedLessons, setCompletedLessons] = useState<Set<number>>(new Set());
-  const [favoritedChapters, setFavoritedChapters] = useState<Set<number>>(new Set());
   const [currentCourseTitle, setCurrentCourseTitle] = useState<string>('');
   const [currentCourseIndex, setCurrentCourseIndex] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
@@ -87,7 +86,6 @@ export default function CourseScreen() {
     // Only load dashboard if user is authenticated and auth loading is complete
     if (isAuthenticated && !authLoading && user) {
       loadDashboard();
-      loadFavoritedChapters();
     }
   }, [isAuthenticated, authLoading, user]);
 
@@ -106,16 +104,6 @@ export default function CourseScreen() {
       }
     }, [isAuthenticated, authLoading])
   );
-
-  const loadFavoritedChapters = async () => {
-    try {
-      const favoritedChaptersData = await ApiService.getAllChapterFavorites();
-      const chapterIds = new Set(favoritedChaptersData.map(ch => ch.chapter_id));
-      setFavoritedChapters(chapterIds);
-    } catch (error) {
-      console.error('Error loading favorited chapters:', error);
-    }
-  };
 
   useEffect(() => {
     if (dashboard && dashboard.available_courses.length > 0) {
@@ -317,67 +305,6 @@ export default function CourseScreen() {
     }
   };
 
-  const toggleChapterFavorite = async (chapterId: number, event: any) => {
-    event.stopPropagation(); // Prevent triggering the chapter card press
-    
-    try {
-      const response = await ApiService.toggleChapterFavorite(chapterId);
-      
-      if (response.action === 'added') {
-        setFavoritedChapters(prev => new Set([...prev, chapterId]));
-        console.log('Added chapter to favorites:', chapterId);
-      } else if (response.action === 'removed') {
-        setFavoritedChapters(prev => {
-          const newSet = new Set(prev);
-          newSet.delete(chapterId);
-          return newSet;
-        });
-        console.log('Removed chapter from favorites:', chapterId);
-      }
-    } catch (error) {
-      console.error('Error toggling chapter favorite:', error);
-    }
-  };
-
-  // Animated Heart Component
-  const AnimatedHeart = ({ chapterId }: { chapterId: number }) => {
-    const scaleAnim = useRef(new Animated.Value(1)).current;
-    const isFavorited = favoritedChapters.has(chapterId);
-
-    const handlePress = (event: any) => {
-      // Animate the heart
-      Animated.sequence([
-        Animated.timing(scaleAnim, {
-          toValue: 1.3,
-          duration: 150,
-          useNativeDriver: true,
-        }),
-        Animated.timing(scaleAnim, {
-          toValue: 1,
-          duration: 150,
-          useNativeDriver: true,
-        }),
-      ]).start();
-
-      toggleChapterFavorite(chapterId, event);
-    };
-
-    return (
-      <TouchableOpacity
-        style={styles.heartIcon}
-        onPress={handlePress}
-      >
-        <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
-          <Ionicons
-            name={isFavorited ? "heart" : "heart-outline"}
-            size={24}
-            color={isFavorited ? "#FF6B6B" : "rgba(255, 255, 255, 0.8)"}
-          />
-        </Animated.View>
-      </TouchableOpacity>
-    );
-  };
-
   const openLessonModal = (chapterId?: number) => {
     setSelectedChapterId(chapterId || null);
     setShowLessonModal(true);
@@ -392,7 +319,6 @@ export default function CourseScreen() {
     try {
       // Reload dashboard and course data
       await loadDashboard();
-      await loadFavoritedChapters();
       
       // If we have a current course, reload its data too
       if (dashboard?.available_courses[currentCourseIndex]) {
@@ -865,8 +791,6 @@ export default function CourseScreen() {
                         }
                       }}
                     />
-                    {/* Heart Icon */}
-                    <AnimatedHeart chapterId={chapterProgress.chapter_id} />
                     <View style={styles.chapterTextContainer}>
                       <Text style={styles.chapterTitle}>{chapterProgress.chapter_title}</Text>
                       <View style={styles.progressContainer}>
@@ -1184,17 +1108,6 @@ const styles = StyleSheet.create({
   },
   scrollViewContent: {
     alignItems: 'center', // Center align scroll view content
-    justifyContent: 'center',
-  },
-  heartIcon: {
-    position: 'absolute',
-    top: 12,
-    right: 12,
-    zIndex: 10,
-    padding: 8,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0, 0, 0, 0.3)',
-    alignItems: 'center',
     justifyContent: 'center',
   },
 

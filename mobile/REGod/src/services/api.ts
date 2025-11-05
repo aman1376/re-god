@@ -1080,7 +1080,9 @@ class ApiService {
 
   // Favourites endpoints (spelling per backend)
   static async getFavorites(): Promise<any[]> {
-    return this.makeAuthenticatedRequest<any[]>('/user/favourites');
+    const response = await this.makeAuthenticatedRequest<any>('/user/favourites');
+    // Return items array from paginated response, or empty array if not found
+    return response?.items || [];
   }
 
   static async toggleFavorite(lessonId: number) {

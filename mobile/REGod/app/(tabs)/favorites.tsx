@@ -65,12 +65,12 @@ export default function FavoritesScreen() {
         if (isAdminOrTeacher) {
           loadResponses();
         } else {
-          // Load chapters first, then use that data for music loading
-          loadFavoritedChapters().then((chaptersData) => {
-            if (chaptersData && chaptersData.length > 0) {
-              loadFavoriteMusic(chaptersData);
+          // Load favorited modules (not chapters)
+          loadFavoritedModules().then((modulesData) => {
+            if (modulesData && modulesData.length > 0) {
+              loadFavoriteMusic(modulesData);
             } else {
-              setFavoriteMusic([]); // Clear music if no chapters
+              setFavoriteMusic([]); // Clear music if no favorited modules
             }
           });
         }
@@ -78,16 +78,18 @@ export default function FavoritesScreen() {
     }, [isAuthenticated, authLoading, isAdminOrTeacher])
   );
 
-  const loadFavoritedChapters = async () => {
+  const loadFavoritedModules = async () => {
     try {
       if (!refreshing) {
         setLoading(true);
       }
-      const favoritedChaptersData = await ApiService.getAllChapterFavorites();
-      setFavoritedChapters(favoritedChaptersData);
-      return favoritedChaptersData; // Return data for music loading
+      const favoritedModulesData = await ApiService.getFavorites();
+      // Ensure we always set an array, even if the API returns undefined/null
+      setFavoritedChapters(Array.isArray(favoritedModulesData) ? favoritedModulesData : []);
+      return Array.isArray(favoritedModulesData) ? favoritedModulesData : [];
     } catch (error) {
-      console.error('Error loading favorited chapters:', error);
+      console.error('Error loading favorited modules:', error);
+      setFavoritedChapters([]); // Set empty array on error
       return [];
     } finally {
       if (!refreshing) {
@@ -96,55 +98,50 @@ export default function FavoritesScreen() {
     }
   };
 
-  const loadFavoriteMusic = async (chaptersData?: any[]) => {
+  const loadFavoriteMusic = async (modulesData?: any[]) => {
     try {
       setMusicLoading(true);
-      // Use provided chapters data or fetch fresh data
-      const favoritedChaptersData = chaptersData || await ApiService.getAllChapterFavorites();
+      // Use provided modules data or fetch fresh data
+      const favoritedModulesData = modulesData || await ApiService.getFavorites();
+      
+      // Ensure we have an array to work with
+      if (!Array.isArray(favoritedModulesData) || favoritedModulesData.length === 0) {
+        setFavoriteMusic([]);
+        return;
+      }
+      
       const musicItems: any[] = [];
 
-      console.log(`Loading music for ${favoritedChaptersData.length} chapters`);
+      console.log(`Loading music for ${favoritedModulesData.length} favorited modules`);
 
-      // Group chapters by course to avoid duplicate API calls
-      const chaptersByCourse = new Map<number, any[]>();
-      for (const chapter of favoritedChaptersData) {
-        const courseId = (chapter as any).course_id;
-        if (!courseId) {
-          console.warn(`Chapter ${chapter.chapter_id} missing course_id, skipping music extraction`);
+      // Extract music from favorited modules
+      for (const favorite of favoritedModulesData) {
+        const moduleId = favorite.lesson_id;
+        const courseId = favorite.course_id;
+        
+        if (!moduleId || !courseId) {
+          console.warn(`Favorite missing module_id or course_id, skipping`);
           continue;
         }
-        if (!chaptersByCourse.has(courseId)) {
-          chaptersByCourse.set(courseId, []);
-        }
-        chaptersByCourse.get(courseId)!.push(chapter);
-      }
 
-      console.log(`Grouped chapters into ${chaptersByCourse.size} unique courses`);
-
-      // Fetch modules once per course (not per chapter)
-      for (const [courseId, chapters] of chaptersByCourse.entries()) {
         try {
+          // Get all modules for this course
           const modules = await ApiService.getAllCourseModules(courseId);
-          const musicModules = modules.filter(module => module.music_selection);
+          const module = modules.find(m => m.id === moduleId);
           
-          console.log(`Found ${musicModules.length} music modules in course ${courseId} for ${chapters.length} chapters`);
-          
-          // Add music items for all chapters in this course
-          chapters.forEach(chapter => {
-            musicModules.forEach(module => {
-              musicItems.push({
-                id: `${chapter.chapter_id}-${module.id}`,
-                title: module.music_selection,
-                mediaUrl: module.media_url,
-                chapterTitle: chapter.chapter_title,
-                courseTitle: chapter.course_title,
-                moduleId: module.id,
-                courseId: courseId
-              });
+          if (module && module.music_selection) {
+            musicItems.push({
+              id: `${moduleId}`,
+              title: module.music_selection,
+              mediaUrl: module.media_url,
+              chapterTitle: favorite.lesson_title || module.title,
+              courseTitle: favorite.course_title || '',
+              moduleId: module.id,
+              courseId: courseId
             });
-          });
+          }
         } catch (error) {
-          console.error(`Error loading modules for course ${courseId}:`, error);
+          console.error(`Error loading module ${moduleId}:`, error);
         }
       }
 
@@ -223,11 +220,11 @@ export default function FavoritesScreen() {
     setRefreshing(true);
     try {
       console.log('Manual refresh triggered');
-      const chaptersData = await loadFavoritedChapters();
+      const chaptersData = await loadFavoritedModules();
       if (chaptersData && chaptersData.length > 0) {
         await loadFavoriteMusic(chaptersData);
       } else {
-        setFavoriteMusic([]); // Clear music if no chapters
+        setFavoriteMusic([]); // Clear music if no favorited modules
       }
     } catch (error) {
       console.error('Error refreshing favorites:', error);
@@ -372,30 +369,52 @@ export default function FavoritesScreen() {
         contentContainerStyle={styles.scrollContent}
       >
 
-        {/* Favorited Chapters Section */}
-        <View style={styles.section}>
-          {/* <Text style={styles.sectionTitle}>Favorited Chapters</Text> */}
-          {loading ? (
-            <Text style={styles.loadingText}>Loading favorited chapters...</Text>
-          ) : favoritedChapters.length > 0 ? (
-            <FlatList
-              data={favoritedChapters}
-              renderItem={renderChapterItem}
-              keyExtractor={item => item.chapter_id.toString()}
-              scrollEnabled={false}
-            />
-          ) : (
-            <View style={styles.emptyState}>
-              <Ionicons name="heart-outline" size={48} color="#ccc" />
-              <Text style={styles.emptyStateText}>No favorited chapters yet</Text>
-              <Text style={styles.emptyStateSubtext}>Tap the heart icon on chapter cards to add them to favorites</Text>
-            </View>
-          )}
-        </View>
+        {/* Favorited Modules Section (for students) */}
+        {!isAdminOrTeacher && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Favorited Lessons</Text>
+            {loading ? (
+              <Text style={styles.loadingText}>Loading favorited lessons...</Text>
+            ) : !favoritedChapters || favoritedChapters.length === 0 ? (
+              <View style={styles.emptyStateContainer}>
+                <Ionicons name="heart-outline" size={60} color="#ccc" />
+                <Text style={styles.emptyStateText}>No favorited lessons yet</Text>
+                <Text style={styles.emptyStateSubtext}>Tap the heart icon on lessons to add them to favorites</Text>
+              </View>
+            ) : (
+              (favoritedChapters || []).map((favorite) => (
+                <TouchableOpacity
+                  key={favorite.id}
+                  style={styles.chapterItem}
+                  onPress={() => {
+                    router.push({
+                      pathname: '/lesson',
+                      params: {
+                        moduleId: favorite.lesson_id,
+                        courseId: favorite.course_id
+                      }
+                    });
+                  }}
+                >
+                  <Image 
+                    source={getImageUrlWithFallback(favorite.thumbnail_url)} 
+                    style={styles.chapterImage} 
+                    resizeMode="cover"
+                  />
+                  <View style={styles.chapterTextContainer}>
+                    <Text style={styles.chapterTitle}>{favorite.lesson_title}</Text>
+                    <Text style={styles.chapterSubtitle}>{favorite.course_title}</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={24} color="#999" />
+                </TouchableOpacity>
+              ))
+            )}
+          </View>
+        )}
       </ScrollView>
 
       {/* Music Section - Fixed at bottom above tab bar */}
-      {favoriteMusic.length > 0 && (
+      {favoriteMusic && favoriteMusic.length > 0 && (
         <View style={styles.musicSection}>
           <Text style={styles.musicSectionTitle}>Music</Text>
           <ScrollView 
